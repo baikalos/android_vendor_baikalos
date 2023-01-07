@@ -1,3 +1,7 @@
+# BaikalOS optional Modules
+PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
+    persist.papp.appmarket.enabled=0
+
 # Additional props
 PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
     ro.error.receiver.system.apps=com.google.android.gms \
