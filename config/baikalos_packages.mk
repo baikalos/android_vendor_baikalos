@@ -1,9 +1,10 @@
-# TARGET_INSTALL_FDROID := true
-# TARGET_INSTALL_HMS := true
+TARGET_INSTALL_FDROID := true
+TARGET_INSTALL_HMS := true
 
 # Required packages
 PRODUCT_PACKAGES += \
     adb_root
+
 #ifeq ($(WITH_SU),true)
 #PRODUCT_PACKAGES += \
 #    su
@@ -72,9 +73,10 @@ endif
 
 ifeq ($(TARGET_INSTALL_HMS),true)
 PRODUCT_PACKAGES += \
-    HMS_Core-base \
-    AppGallery_base \
+    HMS_Core \
+    AppGallery \
     hms_core_whitelist.xml \
-    privapp-permissions-hms_core.xml
-
+    privapp-permissions-hms_core.xml \
+    default_permissions_com.huawei.hms.xml \
+    default_permissions_com.huawei.appmarket.xml
 endif
