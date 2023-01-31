@@ -231,4 +231,8 @@ include vendor/lineage/config/version.mk
 -include vendor/lineage-priv/keys/keys.mk
 
 -include $(WORKSPACE)/build_env/image-auto-bits.mk
--include vendor/lineage/config/partner_gms.mk
+# -include vendor/lineage/config/partner_gms.mk
+
+BUILD_BROKEN_DUP_RULES := true
+-include vendor/gapps/arm64/arm64-vendor.mk
+
