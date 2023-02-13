@@ -1,3 +1,4 @@
+# TARGET_INSTALL_AURORA := true
 TARGET_INSTALL_FDROID := true
 TARGET_INSTALL_HMS := true
 
@@ -62,6 +63,32 @@ endif
 PRODUCT_PACKAGES += \
     baikal_su
 
+# MiuiCamera
+#PRODUCT_PACKAGES += \
+#    MiuiCamera \
+#    privapp-permissions-miui_camera.xml \
+
+
+# Alarms
+$(foreach f,$(shell find vendor/lineage/prebuilt/common/product/media/audio/alarms/* | sed 's/ /\\ /g'),\
+    $(eval PRODUCT_COPY_FILES += $(f):$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/$(notdir $f)))
+
+# notifications
+$(foreach f,$(shell find vendor/lineage/prebuilt/common/product/media/audio/notifications/* | sed 's/ /\\ /g'),\
+    $(eval PRODUCT_COPY_FILES += $(f):$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/$(notdir $f)))
+
+# ringtones
+$(foreach f,$(shell find vendor/lineage/prebuilt/common/product/media/audio/ringtones/*  | sed 's/ /\\ /g'),\
+    $(eval PRODUCT_COPY_FILES += $(f):$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/$(notdir $f)))
+
+
+ifeq ($(TARGET_INSTALL_AURORA),true)
+PRODUCT_PACKAGES += \
+    AuroraStore \
+    AuroraServices \
+    privapp-permissions-auroraservices.xml
+
+endif
 
 ifeq ($(TARGET_INSTALL_FDROID),true)
 PRODUCT_PACKAGES += \
@@ -80,3 +107,6 @@ PRODUCT_PACKAGES += \
     default_permissions_com.huawei.hms.xml \
     default_permissions_com.huawei.appmarket.xml
 endif
+
+
+
