@@ -1,0 +1,27 @@
+android_app_import {
+	name: "AuroraStore",
+	apk: "AuroraStore.apk",
+	presigned: true,
+	dex_preopt: {
+		enabled: false,
+	}
+}
+
+android_app_import {
+	name: "AuroraServices",
+	apk: "AuroraServices.apk",
+	presigned: true,
+	dex_preopt: {
+		enabled: false,
+	},
+	privileged: true
+}
+
+
+prebuilt_etc {
+    name: "privapp-permissions-auroraservices.xml",
+    src: "privapp-permissions-auroraservices.xml",
+    sub_dir: "permissions",
+    filename_from_src: true
+}
+
