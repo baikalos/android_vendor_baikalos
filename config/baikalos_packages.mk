@@ -63,6 +63,11 @@ endif
 PRODUCT_PACKAGES += \
     baikal_su
 
+# JamesDSP
+PRODUCT_PACKAGES += \
+    JamesDSPManager
+
+
 # MiuiCamera
 #PRODUCT_PACKAGES += \
 #    MiuiCamera \
@@ -80,6 +85,8 @@ $(foreach f,$(shell find vendor/lineage/prebuilt/common/product/media/audio/noti
 # ringtones
 $(foreach f,$(shell find vendor/lineage/prebuilt/common/product/media/audio/ringtones/*  | sed 's/ /\\ /g'),\
     $(eval PRODUCT_COPY_FILES += $(f):$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/$(notdir $f)))
+
+
 
 
 ifeq ($(TARGET_INSTALL_AURORA),true)
@@ -106,6 +113,7 @@ PRODUCT_PACKAGES += \
     privapp-permissions-hms_core.xml \
     default_permissions_com.huawei.hms.xml \
     default_permissions_com.huawei.appmarket.xml
+
 endif
 
 
