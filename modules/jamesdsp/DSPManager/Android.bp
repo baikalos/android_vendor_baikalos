@@ -32,9 +32,8 @@ android_app {
     platform_apis: true,
     privileged: true,
     certificate: "platform",
-    system_ext_specific: true,
 
-    overrides: ["MusicFX"],
+    //overrides: ["MusicFX"],
 
     optimize: {
         enabled: false,
@@ -46,7 +45,7 @@ android_app {
 prebuilt_etc {
     name: "privapp_whitelist_james.dsp",
     src: "privapp_whitelist_james.dsp.xml",
-    system_ext_specific: true,
     sub_dir: "permissions",
     filename_from_src: true,
+
 }

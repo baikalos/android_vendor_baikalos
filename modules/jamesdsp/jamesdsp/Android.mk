@@ -58,8 +58,8 @@ LOCAL_SRC_FILES := \
 	jamesdsp.c \
 
 # terminator
-LOCAL_CPPFLAGS := -ffunction-sections -fdata-sections -Ofast -march=armv8-a -mfpu=neon -ftree-vectorize -fvisibility=hidden -DDEBUG -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable -Wno-implicit-int -Wno-pointer-sign -Wno-missing-field-initializers -Wno-incompatible-pointer-types-discards-qualifiers -Wno-error -Wno-pointer-bool-conversion
-LOCAL_CFLAGS := -ffunction-sections -fdata-sections -Ofast -march=armv8-a -mfpu=neon -ftree-vectorize -fvisibility=hidden -DDEBUG -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable -Wno-implicit-int -Wno-pointer-sign -Wno-missing-field-initializers -Wno-incompatible-pointer-types-discards-qualifiers -Wno-error -Wno-pointer-bool-conversion
-LOCAL_LDFLAGS += -Wl,--gc-sections,--exclude-libs,ALL  -Wno-unused-function -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable
+LOCAL_CPPFLAGS := -ffunction-sections -fdata-sections -Ofast -march=armv8-a -mfpu=neon -ftree-vectorize -fvisibility=hidden -DDEBUG -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable -Wno-implicit-int -Wno-pointer-sign -Wno-missing-field-initializers -Wno-incompatible-pointer-types-discards-qualifiers -Wno-error -Wno-pointer-bool-conversion -DDEBUG
+LOCAL_CFLAGS := -ffunction-sections -fdata-sections -Ofast -march=armv8-a -mfpu=neon -ftree-vectorize -fvisibility=hidden -DDEBUG -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable -Wno-implicit-int -Wno-pointer-sign -Wno-missing-field-initializers -Wno-incompatible-pointer-types-discards-qualifiers -Wno-error -Wno-pointer-bool-conversion -DDEBUG
+LOCAL_LDFLAGS += -Wl,--gc-sections,--exclude-libs,ALL  -Wno-unused-function -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable -DDEBUG
 
 include $(BUILD_SHARED_LIBRARY)
