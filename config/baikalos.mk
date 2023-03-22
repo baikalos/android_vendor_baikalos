@@ -1,3 +1,7 @@
+
+PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
+    ro.control_privapp_permissions=log
+
 # BaikalOS optional Modules
 PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
     persist.papp.appmarket.enabled=0
