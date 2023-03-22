@@ -67,6 +67,7 @@ public class HeadsetService extends Service
 		public AudioEffect JamesDSP;
 		public JDSPModule(int sessionId)
 		{
+
 			try
 			{
 				/*
@@ -81,6 +82,15 @@ public class HeadsetService extends Service
 			{
 				throw new RuntimeException(e);
 			}
+
+            if( JamesDSP != null ) {
+        		AudioEffect.Descriptor dspDescriptor = JamesDSP.getDescriptor();
+
+                Log.e(DSPManager.TAG,"Effect name: " + dspDescriptor.name + "\nType id: " + dspDescriptor.type
+							+ "\nUnique id: " + dspDescriptor.uuid + "\nImplementor: " + dspDescriptor.implementor);
+    
+            }
+
 			if (DSPManager.devMsgDisplay)
 			{
 				if (JamesDSP != null)
@@ -344,37 +354,43 @@ public class HeadsetService extends Service
 	private final BroadcastReceiver mAudioSessionReceiver = new BroadcastReceiver()
 	{
 		@Override
-		public void onReceive(Context context, Intent intent)
-	{
-		String action = intent.getAction();
-		int sessionId = intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, 0);
-		if (sessionId == 0)
-			return;
-		if (action.equals(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION))
-		{
-			if (modeEffect == 0)
-				return;
-			if (!mAudioSessions.containsKey(sessionId)) {
-				JDSPModule fxId = new JDSPModule(sessionId);
-				if (fxId.JamesDSP == null)
-				{
-					Log.e(DSPManager.TAG, "Audio session load fail");
-					fxId.release();
-					fxId = null;
-				}
-				else
-					mAudioSessions.put(sessionId, fxId);
-				updateDsp(false, true);
-			}
-		}
-		if (action.equals(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION))
-		{
-			JDSPModule gone = mAudioSessions.remove(sessionId);
-			if (gone != null)
-				gone.release();
-			gone = null;
-		}
-	}
+    	public void onReceive(Context context, Intent intent)
+	    {
+
+	    	String action = intent.getAction();
+    
+    		Log.e(DSPManager.TAG, "Audio effect control session :" + intent);
+
+    		int sessionId = intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, 0);
+    		if (sessionId == 0) {
+ 				updateDsp(false, true);
+    			return;
+            }
+    		if (action.equals(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION))
+    		{
+			//if (modeEffect == 0)
+			//	return;
+    			if (!mAudioSessions.containsKey(sessionId)) {
+    				JDSPModule fxId = new JDSPModule(sessionId);
+    				if (fxId.JamesDSP == null)
+    				{
+    					Log.e(DSPManager.TAG, "Audio session load fail");
+    					fxId.release();
+    					fxId = null;
+    				}
+    				else
+    					mAudioSessions.put(sessionId, fxId);
+    				updateDsp(false, true);
+    			}
+    		}
+    		if (action.equals(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION))
+    		{
+    			JDSPModule gone = mAudioSessions.remove(sessionId);
+    			if (gone != null)
+    				gone.release();
+    			gone = null;
+    		}
+    	}
 	};
 	/**
 	* Update audio parameters when preferences have been updated.
@@ -383,9 +399,10 @@ public class HeadsetService extends Service
 	{
 		@Override
 		public void onReceive(Context context, Intent intent)
-	{
-		updateDsp(false, true);
-	}
+    	{
+            Log.i(DSPManager.TAG, "preferenceReceiver :" + intent);
+		    updateDsp(false, true);
+	    }
 	};
 
 	/**
@@ -397,50 +414,53 @@ public class HeadsetService extends Service
 	{
 		@Override
 		public void onReceive(final Context context, final Intent intent)
-	{
-		final String action = intent.getAction();
-		final boolean prevUseHeadset = mUseHeadset;
-		if (action.equals(AudioManager.ACTION_HEADSET_PLUG))
-			mUseHeadset = intent.getIntExtra("state", 0) == 1;
-		 else
-             if (Build.VERSION.SDK_INT >= 16 && action.equals("android.intent.action.ANALOG_AUDIO_DOCK_PLUG"))
-            	 mUseHeadset = intent.getIntExtra("state", 0) == 1;
-		if (prevUseHeadset != mUseHeadset)
-			updateDsp(true, true);
-	}
+    	{
+            Log.i(DSPManager.TAG, "routingReceiver :" + intent);
+    		final String action = intent.getAction();
+    		final boolean prevUseHeadset = mUseHeadset;
+    		if (action.equals(AudioManager.ACTION_HEADSET_PLUG))
+    			mUseHeadset = intent.getIntExtra("state", 0) == 1;
+    		 else
+                 if (Build.VERSION.SDK_INT >= 16 && action.equals("android.intent.action.ANALOG_AUDIO_DOCK_PLUG"))
+                	 mUseHeadset = intent.getIntExtra("state", 0) == 1;
+    		if (prevUseHeadset != mUseHeadset)
+    			updateDsp(true, true);
+    	}
 	};
 
 	private final BroadcastReceiver mBtReceiver = new BroadcastReceiver()
 	{
 		@Override
 		public void onReceive(final Context context, final Intent intent)
-	{
-		final String action = intent.getAction();
-		if (action.equals(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED))
-		{
-			int state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_CONNECTED);
-			if (state == BluetoothProfile.STATE_CONNECTED && !mUseBluetooth)
-			{
-				mUseBluetooth = true;
-				updateDsp(true, true);
-			}
-			else if (mUseBluetooth)
-			{
-				mUseBluetooth = false;
-				updateDsp(true, true);
-			}
-		}
-		else if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED))
-		{
-			String stateExtra = BluetoothAdapter.EXTRA_STATE;
-			int state = intent.getIntExtra(stateExtra, -1);
-			if (state == BluetoothAdapter.STATE_OFF && mUseBluetooth)
-			{
-				mUseBluetooth = false;
-				updateDsp(true, true);
-			}
-		}
-	}
+	    {
+            Log.i(DSPManager.TAG, "btReceiver :" + intent);
+
+    		final String action = intent.getAction();
+    		if (action.equals(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED))
+    		{
+    			int state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_CONNECTED);
+    			if (state == BluetoothProfile.STATE_CONNECTED && !mUseBluetooth)
+    			{
+    				mUseBluetooth = true;
+    				updateDsp(true, true);
+    			}
+    			else if (mUseBluetooth)
+    			{
+    				mUseBluetooth = false;
+    				updateDsp(true, true);
+    			}
+    		}
+    		else if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED))
+    		{
+    			String stateExtra = BluetoothAdapter.EXTRA_STATE;
+    			int state = intent.getIntExtra(stateExtra, -1);
+    			if (state == BluetoothAdapter.STATE_OFF && mUseBluetooth)
+    			{
+    				mUseBluetooth = false;
+    				updateDsp(true, true);
+    			}
+    		}
+    	}
 	};
 	private void foregroundPersistent(String mFXType)
 	{
@@ -510,7 +530,8 @@ public class HeadsetService extends Service
 		final IntentFilter btFilter = new IntentFilter();
 		btFilter.addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED);
 		btFilter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
-		registerReceiver(mBtReceiver, btFilter);AudioManager mAudioManager = (AudioManager) getApplicationContext().getSystemService(Context.AUDIO_SERVICE);
+		registerReceiver(mBtReceiver, btFilter);
+        AudioManager mAudioManager = (AudioManager) getApplicationContext().getSystemService(Context.AUDIO_SERVICE);
         if (mAudioManager != null)
         {
             mUseBluetooth = mAudioManager.isBluetoothA2dpOn();
@@ -532,7 +553,7 @@ public class HeadsetService extends Service
 		preferencesMode = getSharedPreferences(DSPManager.SHARED_PREFERENCES_BASENAME + "." + "settings", 0);
 		if (!preferencesMode.contains("dsp.app.modeEffect"))
 			preferencesMode.edit().putInt("dsp.app.modeEffect", 0).commit();
-		modeEffect = preferencesMode.getInt("dsp.app.modeEffect", 0);
+		modeEffect = 0; // preferencesMode.getInt("dsp.app.modeEffect", 0);
 		if (JamesDSPGbEf != null)
 		{
 			JamesDSPGbEf.release();
@@ -545,9 +566,11 @@ public class HeadsetService extends Service
 			if (JamesDSPGbEf.JamesDSP == null)
 			{
 				Toast.makeText(HeadsetService.this, "Library load failed(Global effect)", Toast.LENGTH_SHORT).show();
+                Log.e(DSPManager.TAG,  "Library load failed(Global effect)");
 				JamesDSPGbEf.release();
 				JamesDSPGbEf = null;
 			}
+            Log.e(DSPManager.TAG,  "Global effect loaded.");
 		}
 		updateDsp(true, true);
 	}
@@ -637,12 +660,16 @@ public class HeadsetService extends Service
 	*/
 	protected void updateDsp(boolean notify, boolean updateConvolver)
 	{
+
+        Log.w(DSPManager.TAG, "update notify=" + notify + ", updateConvolver=" + updateConvolver);
+
 		modeEffect = preferencesMode.getInt("dsp.app.modeEffect", 0);
 		final String mode = getAudioOutputRouting();
 		SharedPreferences preferences = getSharedPreferences(DSPManager.SHARED_PREFERENCES_BASENAME + "." + mode, 0);
 		if (notify)
 		{
 			String pid = "";
+
 			if (JamesDSPGbEf != null)
 				pid = " PID:" + JamesDSPGbEf.getParameter(JamesDSPGbEf.JamesDSP, 20002);
 			if (mode == "bluetooth")
@@ -654,8 +681,8 @@ public class HeadsetService extends Service
 			Intent intent = new Intent("dsp.activity.updatePage");
 			sendBroadcast(intent);
 		}
-		if (modeEffect == 0)
-		{
+		//if (sessionId == 0 /* modeEffect == 0 */)
+		//{
 			try
 			{
 				updateDsp(preferences, JamesDSPGbEf, updateConvolver, 0);
@@ -663,9 +690,9 @@ public class HeadsetService extends Service
 			catch (Exception e)
 			{
 			}
-		}
-		else
-		{
+		//}
+		//else
+		//{
 			for (Integer sessionId : new ArrayList<Integer>(mAudioSessions.keySet()))
 			{
 				try
@@ -677,11 +704,14 @@ public class HeadsetService extends Service
 					mAudioSessions.remove(sessionId);
 				}
 			}
-		}
+		//}
 	}
 
 	private void updateDsp(SharedPreferences preferences, JDSPModule session, boolean updateMajor, int sessionId)
 	{
+
+        Log.w(DSPManager.TAG, "update updateMajor=" + updateMajor + ", sessionId=" + sessionId);
+
 		boolean masterSwitch = preferences.getBoolean("dsp.masterswitch.enable", false);
 		session.JamesDSP.setEnabled(masterSwitch); // Master switch
 		if (masterSwitch)

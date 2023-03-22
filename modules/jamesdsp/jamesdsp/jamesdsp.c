@@ -139,6 +139,7 @@ int32_t EffectDSPMainCommand(EffectDSPMain *dspmain, uint32_t cmdCode, uint32_t 
 {
 #ifdef DEBUG
 //		LOGI("Memory used: %f Mb", (float)getCurrentRSS() / 1024.0 / 1024.0);
+	LOGI("command %d", cmdCode);
 #endif
 	if (cmdCode == EFFECT_CMD_SET_CONFIG)
 	{

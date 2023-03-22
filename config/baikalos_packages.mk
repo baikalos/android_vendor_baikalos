@@ -1,6 +1,7 @@
 # TARGET_INSTALL_AURORA := true
-TARGET_INSTALL_FDROID := true
-TARGET_INSTALL_HMS := true
+# TARGET_INSTALL_FDROID := true
+# TARGET_INSTALL_HMS := true
+# TARGET_INSTALL_AURORA := true
 
 # Required packages
 PRODUCT_PACKAGES += \
@@ -12,9 +13,10 @@ PRODUCT_PACKAGES += \
 #endif
 
 # JamesDSP
-#PRODUCT_PACKAGES += \
-#    libjamesdsp \
-#    JamesDSPManager
+PRODUCT_PACKAGES += \
+    JamesDSPManager \
+    libjamesdsp \
+    libjamesDSPImpulseToolbox \
 
 # Boot animation include
 ifneq ($(TARGET_SCREEN_WIDTH) $(TARGET_SCREEN_HEIGHT),$(space))
@@ -62,11 +64,6 @@ endif
 # baikalos su
 PRODUCT_PACKAGES += \
     baikal_su
-
-# JamesDSP
-PRODUCT_PACKAGES += \
-    JamesDSPManager
-
 
 # MiuiCamera
 #PRODUCT_PACKAGES += \

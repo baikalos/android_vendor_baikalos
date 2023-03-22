@@ -20,7 +20,7 @@ import android.app.Application;
 public class JamesDSPApplication extends Application {
 
     private static final String TAG = JamesDSPApplication.class.getSimpleName();
-    private static final boolean DEBUG = false;
+    private static final boolean DEBUG = true;
 
     @Override
     public void onCreate() {
