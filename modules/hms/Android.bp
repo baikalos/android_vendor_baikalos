@@ -1,0 +1,51 @@
+android_app_import {
+	name: "AppGallery",
+	apk: "AppGallery.apk",
+	owner: "baikal",
+    preprocessed: true,
+	presigned: true,
+	dex_preopt: {
+		enabled: false,
+	},
+	privileged: true
+}
+
+android_app_import {
+	name: "HMS_Core",
+	apk: "HMS_Core.apk",
+	owner: "baikal",
+    preprocessed: true,
+	presigned: true,
+	dex_preopt: {
+		enabled: false,
+	},
+	privileged: true
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-hms_core.xml",
+    src: "privapp-permissions-hms_core.xml",
+    sub_dir: "permissions",
+    filename_from_src: true
+}
+
+prebuilt_etc {
+    name: "hms_core_whitelist.xml",
+    src: "hms_core_whitelist.xml",
+    sub_dir: "sysconfig",
+    filename_from_src: true
+}
+
+prebuilt_etc {
+    name: "default_permissions_com.huawei.hms.xml",
+    src: "default_permissions_com.huawei.hms.xml",
+    sub_dir: "default-permissions",
+    filename_from_src: true
+}
+
+prebuilt_etc {
+    name: "default_permissions_com.huawei.appmarket.xml",
+    src: "default_permissions_com.huawei.appmarket.xml",
+    sub_dir: "default-permissions",
+    filename_from_src: true
+}

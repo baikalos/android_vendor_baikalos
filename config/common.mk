@@ -1,10 +1,9 @@
 # Allow vendor/extra to override any property by setting it first
 $(call inherit-product-if-exists, vendor/extra/product.mk)
-$(call inherit-product-if-exists, vendor/lineage/config/crdroid.mk)
 $(call inherit-product-if-exists, vendor/addons/config.mk)
 $(call inherit-product-if-exists, external/faceunlock/config.mk)
 
-PRODUCT_BRAND ?= crDroidAndroid
+PRODUCT_BRAND ?= BAIKALOS
 
 PRODUCT_BUILD_PROP_OVERRIDES += BUILD_UTC_DATE=0
 
@@ -59,6 +58,7 @@ PRODUCT_COPY_FILES += \
 
 # Lineage-specific init rc file
 PRODUCT_COPY_FILES += \
+    vendor/lineage/prebuilt/common/etc/init/init.baikalos-system_ext.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/init.baikalos-system_ext.rc \
     vendor/lineage/prebuilt/common/etc/init/init.lineage-system_ext.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/init.lineage-system_ext.rc
 
 # Enable Android Beam on all targets
@@ -78,8 +78,8 @@ PRODUCT_COPY_FILES += \
     vendor/lineage/config/permissions/org.lineageos.android.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/permissions/org.lineageos.android.xml
 
 # Enforce privapp-permissions whitelist
-PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
-    ro.control_privapp_permissions=enforce
+#PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
+#    ro.control_privapp_permissions=enforce
 
 ifneq ($(TARGET_DISABLE_LINEAGE_SDK), true)
 # Lineage SDK
@@ -113,8 +113,8 @@ endif
 # Bootanimation
 TARGET_SCREEN_WIDTH ?= 1080
 TARGET_SCREEN_HEIGHT ?= 1920
-PRODUCT_PACKAGES += \
-    bootanimation.zip
+#PRODUCT_PACKAGES += \
+#    bootanimation.zip
 
 # Build Manifest
 PRODUCT_PACKAGES += \
@@ -125,7 +125,7 @@ PRODUCT_PACKAGES += \
     LineageParts \
     LineageSettingsProvider \
     LineageSetupWizard \
-    Updater
+    #Updater
 
 PRODUCT_COPY_FILES += \
     vendor/lineage/prebuilt/common/etc/init/init.lineage-updater.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/init.lineage-updater.rc
@@ -232,9 +232,16 @@ PRODUCT_PACKAGE_OVERLAYS += vendor/crowdin/overlay
 PRODUCT_EXTRA_RECOVERY_KEYS += \
     vendor/lineage/build/target/product/security/lineage
 
+$(call inherit-product-if-exists, vendor/lineage/config/baikalos.mk)
+$(call inherit-product-if-exists, vendor/lineage/config/baikalos_packages.mk)
+
 include vendor/lineage/config/version.mk
 
 -include vendor/lineage-priv/keys/keys.mk
 
 -include $(WORKSPACE)/build_env/image-auto-bits.mk
--include vendor/lineage/config/partner_gms.mk
+# -include vendor/lineage/config/partner_gms.mk
+
+BUILD_BROKEN_DUP_RULES := true
+# -include vendor/gapps/arm64/arm64-vendor.mk
+
