@@ -1,0 +1,134 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<!--
+     Copyright (C) 2022 crDroid Android Project
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+-->
+
+<!--
+    This file contains permissions to be granted by default. Default
+    permissions are granted to special platform components and to apps
+    that are approved to get default grants. The special components
+    are apps that are expected to work out-of-the-box as they provide
+    core use cases such as default dialer, default email, etc. These
+    grants are managed by the platform. The apps that are additionally
+    approved for default grants are ones that provide carrier specific
+    functionality, ones legally required at some location, ones providing
+    alternative disclosure and opt-out UI, ones providing highlight features
+    of a dedicated device, etc. This file contains only the latter exceptions.
+    Fixed permissions cannot be controlled by the user and need a special
+    approval. Typically these are to ensure either legally mandated functions
+    or the app is considered a part of the OS.
+-->
+<exceptions>
+    <exception package="com.huawei.appmarket">
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_BACKGROUND_LOCATION" fixed="false"/>
+
+        <permission name="android.permission.AUTHENTICATE_ACCOUNTS" fixed="false"/>
+        <permission name="android.permission.GET_ACCOUNTS" fixed="false"/>
+        <permission name="android.permission.MANAGE_ACCOUNTS" fixed="false"/>
+        <permission name="android.permission.USE_CREDENTIALS" fixed="false"/>
+        <permission name="android.permission.WAKE_LOCK" fixed="false"/>
+        <permission name="android.permission.VIBRATE" fixed="false"/>
+
+        <permission name="android.permission.WRITE_EXTERNAL_STORAGE" fixed="false"/>
+        <permission name="android.permission.INTERNET" fixed="false"/>
+        <permission name="android.permission.HIDE_NON_SYSTEM_OVERLAY_WINDOWS" fixed="false"/>
+        <permission name="android.permission.READ_PHONE_STATE" fixed="false"/>
+        <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" fixed="false"/>
+        <permission name="android.permission.MODIFY_PHONE_STATE" fixed="false"/>
+
+        <permission name="android.permission.ACCESS_NETWORK_STATE" fixed="false"/>
+        <permission name="android.permission.ACCESS_WIFI_STATE" fixed="false"/>
+
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
+
+        <permission name="android.permission.CAMERA" fixed="false"/>
+        <permission name="android.permission.USE_FINGERPRINT" fixed="false"/>
+        <permission name="android.permission.READ_EXTERNAL_STORAGE" fixed="false"/>
+        <permission name="android.permission.INSTALL_PACKAGES" fixed="false"/>
+
+        <permission name="android.permission.READ_SMS" fixed="false"/>
+        <permission name="android.permission.READ_CONTACTS" fixed="false"/>
+        <permission name="android.permission.WRITE_SETTINGS" fixed="false"/>
+
+        <permission name="android.permission.REQUEST_INSTALL_PACKAGES" fixed="false"/>
+        <permission name="android.permission.GET_TASKS" fixed="false"/>
+        <permission name="android.permission.SYSTEM_OVERLAY_WINDOW" fixed="false"/>
+
+        <permission name="android.permission.EXPAND_STATUS_BAR" fixed="false"/>
+        <permission name="android.permission.WRITE_SECURE_SETTINGS" fixed="false"/>
+
+        <permission name="android.permission.READ_CALENDAR" fixed="false"/>
+        <permission name="android.permission.WRITE_CALENDAR" fixed="false"/>
+
+        <permission name="android.permission.BROADCAST_STICKY" fixed="false"/>
+        <permission name="android.permission.REAL_GET_TASKS" fixed="false"/>
+
+        <permission name="android.permission.QUERY_ALL_PACKAGES" fixed="false"/>
+
+        <permission name="com.android.permission.GET_INSTALLED_APPS" fixed="false"/>
+
+        <permission name="android.permission.FORCE_STOP_PACKAGES" fixed="false"/>
+        <permission name="android.permission.KILL_BACKGROUND_PROCESSES" fixed="false"/>
+        <permission name="android.permission.ACCESS_BACKGROUND_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACTIVITY_RECOGNITION" fixed="false"/>
+
+        <permission name="android.permission.CHANGE_WIFI_STATE" fixed="false"/>
+        <permission name="android.permission.FLASHLIGHT" fixed="false"/>
+        <permission name="android.permission.FOREGROUND_SERVICE" fixed="false"/>
+        <permission name="android.permission.INTERACT_ACROSS_USERS" fixed="false"/>
+        <permission name="android.permission.LOCAL_MAC_ADDRESS" fixed="false"/>
+
+        <permission name="android.permission.MANAGE_FINGERPRINT" fixed="false"/>
+        <permission name="android.permission.NFC" fixed="false"/>
+        <permission name="android.permission.READ_LOGS" fixed="false"/>
+
+        <permission name="android.permission.RECEIVE_BOOT_COMPLETED" fixed="false"/>
+        <permission name="android.permission.REORDER_TASKS" fixed="false"/>
+        <permission name="android.permission.SET_ACTIVITY_WATCHER" fixed="false"/>
+        <permission name="android.permission.UPDATE_APP_OPS_STATS" fixed="false"/>
+        <permission name="android.permission.UPDATE_DEVICE_STATS" fixed="false"/>
+        <permission name="android.permission.USE_BIOMETRIC" fixed="false"/>
+        <permission name="android.permission.USE_FACERECOGNITION" fixed="false"/>
+
+        <permission name="android.permission.STOP_APP_SWITCHES" fixed="false"/>
+        <permission name="android.permission.MANAGE_APPOPS" fixed="false"/>
+        <permission name="android.permission.MANAGE_EXTERNAL_STORAGE" fixed="false"/>
+        <permission name="android.permission.BROADCAST_PACKAGE_REMOVED" fixed="false"/>
+
+
+        <permission name="android.permission.READ_MEDIA_AUDIO" fixed="false"/>
+        <permission name="android.permission.READ_MEDIA_IMAGES" fixed="false"/>
+        <permission name="android.permission.READ_MEDIA_VIDEO" fixed="false"/>
+
+        <permission name="android.permission.CHANGE_NETWORK_STATE" fixed="false"/>
+
+        <permission name="android.permission.BROADCAST_CLOSE_SYSTEM_DIALOGS" fixed="false"/>
+        <permission name="android.permission.SCHEDULE_EXACT_ALARM" fixed="false"/>
+        <permission name="android.permission.BLUETOOTH_CONNECT" fixed="false"/>
+        <permission name="android.permission.HIGH_SAMPLING_RATE_SENSORS" fixed="false"/>
+        <permission name="android.permission.BLUETOOTH_SCAN" fixed="false"/>
+        <permission name="android.permission.BLUETOOTH_ADVERTISE" fixed="false"/>
+        <permission name="android.permission.POST_NOTIFICATIONS" fixed="false"/>
+
+        <permission name="android.permission.CHANGE_COMPONENT_ENABLED_STATE" fixed="false"/>
+
+        <permission name="com.android.systemui.permission.removeTask" fixed="false"/>
+        <permission name="com.google.android.gms.permission.AD_ID" fixed="false"/>
+
+    </exception>
+</exceptions>
