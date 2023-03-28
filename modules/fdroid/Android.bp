@@ -1,0 +1,27 @@
+android_app_import {
+	name: "F-Droid",
+	apk: "F-Droid.apk",
+	presigned: true,
+	dex_preopt: {
+		enabled: false,
+	}
+}
+
+android_app_import {
+	name: "F-DroidPrivilegedExtension",
+	apk: "F-DroidPrivilegedExtension.apk",
+	presigned: true,
+	dex_preopt: {
+		enabled: false,
+	},
+	privileged: true
+}
+
+
+prebuilt_etc {
+    name: "privapp-permissions-fdroid.privileged.xml",
+    src: "privapp-permissions-fdroid.privileged.xml",
+    sub_dir: "permissions",
+    filename_from_src: true
+}
+
