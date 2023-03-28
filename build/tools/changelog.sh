@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # Copyright (C) 2017-2022 crDroid Android Project
+# Copyright (C) 2023 BaikalOS Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,7 +38,7 @@ else
 	fi
 fi
 
-REPO_LIST="$(repo list --path | sed 's|^vendor/crDroidOTA$||')"
+REPO_LIST="$(repo list --path | sed 's|^vendor/BaikalOTA$||')"
 for i in $(seq $changelog_days); do
     After_Date=`date --date="$i days ago" +%m-%d-%Y`
     k=$(expr $i - 1)
