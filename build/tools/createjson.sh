@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # Copyright (C) 2019-2022 crDroid Android Project
+# Copyright (C) 2023 BaikalOS Android Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +17,7 @@
 #
 
 #$1=TARGET_DEVICE, $2=PRODUCT_OUT, $3=FILE_NAME
-existingOTAjson=./vendor/crDroidOTA/$1.json
+existingOTAjson=./vendor/BaikalOTA/$1.json
 output=$2/$1.json
 
 #cleanup old file
@@ -96,7 +97,7 @@ if [ -f $existingOTAjson ]; then
 			"oem": "'$oem'",
 			"device": "'$device'",
 			"filename": "'$filename'",
-			"download": "https://sourceforge.net/projects/crdroid/files/'$1'/'$v_max'.x/'$3'/download",
+			"download": "https://sourceforge.net/projects/baikalos/files/'$1'/'$v_max'.x/'$3'/download",
 			"timestamp": '$timestamp',
 			"md5": "'$md5'",
 			"sha256": "'$sha256'",
@@ -137,7 +138,7 @@ else
 			"oem": "''",
 			"device": "''",
 			"filename": "'$filename'",
-			"download": "https://sourceforge.net/projects/crdroid/files/'$1'/'$v_max'.x/'$3'/download",
+			"download": "https://sourceforge.net/projects/baikalos/files/'$1'/'$v_max'.x/'$3'/download",
 			"timestamp": '$timestamp',
 			"md5": "'$md5'",
 			"sha256": "'$sha256'",
@@ -160,7 +161,7 @@ else
 }' >> $output
 
 	echo 'There is no official support for this device yet'
-	echo 'Consider adding official support by reading the documentation at https://github.com/crdroidandroid/android_vendor_crDroidOTA/blob/13.0/README.md'
+	echo 'Consider adding official support by reading the documentation at https://github.com/baikalos/android_vendor_BaikalOTA/blob/13.0/README.md'
 fi
 
 echo ""
