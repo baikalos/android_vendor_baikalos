@@ -4,13 +4,13 @@ ADDITIONAL_SYSTEM_PROPERTIES += \
     ro.build.fingerprint=$(BUILD_FINGERPRINT)
 endif
 
-# crDroid System Version
+# BaikalOS System Version
 ADDITIONAL_SYSTEM_PROPERTIES += \
-    ro.crdroid.build.version=$(LINEAGE_VERSION) \
-    ro.crdroid.display.version=$(LINEAGE_DISPLAY_VERSION) \
-    ro.crdroid.version=$(PRODUCT_VERSION_MAJOR).$(PRODUCT_VERSION_MINOR) \
-    ro.modversion=$(CR_VERSION) \
-    ro.crdroidlegal.url=https://crdroid.net/legal.php
+    ro.baikalos.build.version=$(LINEAGE_VERSION) \
+    ro.baikalos.display.version=$(LINEAGE_DISPLAY_VERSION) \
+    ro.baikalos.version=$(PRODUCT_VERSION_MAJOR).$(PRODUCT_VERSION_MINOR) \
+    ro.modversion=$(BAIKALOS_VERSION) \
+    ro.baikaloslegal.url=https://baikalos.net/legal.php
 
 # LineageOS Platform SDK Version
 ADDITIONAL_SYSTEM_PROPERTIES += \
