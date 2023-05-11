@@ -31,7 +31,6 @@ PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
     setupwizard.feature.show_support_link_in_deferred_setup=false \
     setupwizard.feature.skip_button_use_mobile_data.carrier1839=true \
     setupwizard.theme=glif_v3_light \
-    setupwizard.feature.enable_wifi_tracker=true
 
 # Disable touch video heatmap to reduce latency, motion jitter, and CPU usage
 # on supported devices with Deep Press input classifier HALs and models
