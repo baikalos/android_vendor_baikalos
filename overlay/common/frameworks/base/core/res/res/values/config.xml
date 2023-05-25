@@ -318,4 +318,7 @@
         <item>com.android.vending</item>
         <item>com.google.android.gms</item>
     </string-array>
+
+    <integer name="config_jobSchedulerInactivityIdleThreshold">600000</integer>
+
 </resources>
