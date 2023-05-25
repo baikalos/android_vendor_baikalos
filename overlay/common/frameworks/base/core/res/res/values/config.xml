@@ -203,6 +203,7 @@
         <item>com.android.settings</item>
         <item>com.android.vending</item>
         <item>com.caf.fmradio</item>
+        <item>com.crdroid.music</item>
         <item>com.crdroid.updater</item>
         <item>com.google.android.GoogleCamera</item>
         <item>com.google.android.apps.cameralite</item>
