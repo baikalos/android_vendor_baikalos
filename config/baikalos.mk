@@ -26,10 +26,8 @@ PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
     setupwizard.feature.lifecycle_refactoring=true \
     setupwizard.feature.notification_refactoring=true \
     setupwizard.feature.portal_notification=true \
-    setupwizard.feature.show_pai_screen_in_main_flow.carrier1839=false \
     setupwizard.feature.show_pixel_tos=true \
     setupwizard.feature.show_support_link_in_deferred_setup=false \
-    setupwizard.feature.skip_button_use_mobile_data.carrier1839=true \
     setupwizard.theme=glif_v3_light \
 
 # Disable touch video heatmap to reduce latency, motion jitter, and CPU usage
