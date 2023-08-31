@@ -171,7 +171,7 @@ int32_t designMinimumPhaseArbIIR(int32_t gridLen, double *ff, double *aa, int32_
 		EEL_STRING_STDOUT_WRITE(msg, strlen(msg));
 		return -1;
 	}
-	npt = npt; // Length of [dc 1 2 ... nyquist] frequencies.
+	//npt = npt; // Length of [dc 1 2 ... nyquist] frequencies.
 	npt2 = npt * 2;
 	int32_t nb = 0;
 	int32_t ne = 0;
