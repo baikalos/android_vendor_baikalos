@@ -26,6 +26,10 @@
 #include <float.h>
 #include "eelCommon.h"
 #include "glue_port.h"
+#include <assert.h>
+#include "eel_matrix.h"
+#include "numericSys/FFTConvolver.h"
+#include "numericSys/HPFloat/xpre.h"
 static void lstrcpyn_safe(char *o, const char *in, int32_t count)
 {
 	if (count > 0)
@@ -132,6 +136,11 @@ struct opcodeRec
 	// OPCODETYPE_FUNC* with fntype=FUNCTYPE_EELFUNC
 	const char *relname;
 };
+float *dataSectionToRamDisk(void *opaque, size_t len)
+{
+	compileContext *c = (compileContext*)opaque;
+	return c->ram_state + (NSEEL_RAM_ITEMSPERBLOCK - len);
+}
 static void *newTmpBlock(compileContext *ctx, int32_t size)
 {
 	const int32_t align = 8;
@@ -535,7 +544,7 @@ void discreteHartleyTransformFloat(float *A, const int32_t nPoints, const float 
 		theta_inc >>= 1;
 	}
 }
-#define M_PIDouble 3.1415926535897932384626433832795f
+#define M_PIDouble 3.1415926535897932384626433832795
 void getAsymmetricWindow(float *analysisWnd, float *synthesisWnd, int32_t k, int32_t m, float freq_temporal)
 {
 	int32_t i;
@@ -546,15 +555,77 @@ void getAsymmetricWindow(float *analysisWnd, float *synthesisWnd, int32_t k, int
 		freq_temporal = 1.8f;
 	int32_t n = ((k - m) << 1) + 2;
 	for (i = 0; i < k - m; ++i)
-		analysisWnd[i] = (float)pow(sqrt(0.5f * (1.0f - cos(2.0f * M_PIDouble * (i + 1.0f) / (float)n))), freq_temporal);
+		analysisWnd[i] = (float)pow(sqrt(0.5 * (1.0 - cos(2.0 * M_PIDouble * (i + 1.0) / (double)n))), freq_temporal);
 	n = (m << 1) + 2;
 	if (freq_temporal > 1.5f)
 		freq_temporal = 1.5f;
 	for (i = k - m; i < k; ++i)
-		analysisWnd[i] = (float)pow(sqrt(0.5f * (1.0f - cos(2.0f * M_PIDouble * ((m + i - (k - m)) + 1.0f) / (float)n))), freq_temporal);
+		analysisWnd[i] = (float)pow(sqrt(0.5 * (1.0 - cos(2.0 * M_PIDouble * ((m + i - (k - m)) + 1.0) / (double)n))), freq_temporal);
 	n = m << 1;
 	for (i = k - (m << 1); i < k; ++i)
-		synthesisWnd[i] = (float)(0.5f * (1.0f - cos(2.0f * M_PIDouble * (float)(i - (k - (m << 1))) / (float)n))) / analysisWnd[i];
+		synthesisWnd[i - (k - (m << 1))] = (float)(0.5 * (1.0 - cos(2.0 * M_PIDouble * (double)(i - (k - (m << 1))) / (double)n))) / analysisWnd[i];
+}
+void getwnd(float *wnd, unsigned int m, unsigned int n, char *mode)
+{
+	unsigned int i;
+	double x;
+	if (!strcmp(mode, "hann"))
+	{
+		for (i = 0; i < m; i++)
+		{
+			x = i / (double)(n - 1);
+			wnd[i] = (float)(0.5 - 0.5 * cos(2 * M_PIDouble * x));
+		}
+	}
+	else if (!strcmp(mode, "hamming"))
+	{
+		for (i = 0; i < m; i++)
+		{
+			x = i / (double)(n - 1);
+			wnd[i] = (float)(0.54 - 0.46 * cos(2 * M_PIDouble * x));
+		}
+	}
+	else if (!strcmp(mode, "blackman"))
+	{
+		for (i = 0; i < m; i++)
+		{
+			x = i / (double)(n - 1);
+			wnd[i] = (float)(0.42 - 0.5 * cos(2 * M_PIDouble * x) + 0.08 * cos(4 * M_PIDouble * x));
+		}
+	}
+	else if (!strcmp(mode, "flattop"))
+	{
+		double a0 = 0.21557895;
+		double a1 = 0.41663158;
+		double a2 = 0.277263158;
+		double a3 = 0.083578947;
+		double a4 = 0.006947368;
+		for (i = 0; i < m; i++)
+		{
+			x = i / (double)(n - 1);
+			wnd[i] = (float)(a0 - a1 * cos(2 * M_PIDouble * x) + a2 * cos(4 * M_PIDouble * x) - a3 * cos(6 * M_PIDouble * x) + a4 * cos(8 * M_PIDouble * x));
+		}
+	}
+}
+void genWnd(float *wnd, unsigned int N, char *type)
+{
+	unsigned int plus1 = N + 1;
+	unsigned int half;
+	unsigned int i;
+	if (plus1 % 2 == 0)
+	{
+		half = plus1 / 2;
+		getwnd(wnd, half, plus1, type);
+		for (i = 0; i < half - 1; i++)
+			wnd[i + half] = wnd[half - i - 1];
+	}
+	else
+	{
+		half = (plus1 + 1) / 2;
+		getwnd(wnd, half, plus1, type);
+		for (i = 0; i < half - 2; i++)
+			wnd[i + half] = wnd[half - i - 2];
+	}
 }
 void STFT_DynInit(int32_t *indexFw, float *analysisWnd)
 {
@@ -589,7 +660,7 @@ void STFT_DynInit(int32_t *indexFw, float *analysisWnd)
 	getAsymmetricWindow(analysisWnd, synthesisWnd, indexFw[0], ovpSmps, indexFw[5] / (float)32767);
 	// Pre-shift window function
 	for (i = 0; i < indexFw[0] - indexFw[2]; i++)
-		synthesisWnd[i] = synthesisWnd[i + indexFw[2]] * (1.0f / indexFw[0]) * 0.5f;
+		synthesisWnd[i] = synthesisWnd[i] * (1.0f / indexFw[0]) * 0.5f;
 }
 int32_t STFTCartesian(float *indexer, float *analysisWnd, float *ptr)
 {
@@ -611,31 +682,7 @@ int32_t STFTCartesian(float *indexer, float *analysisWnd, float *ptr)
 		lR = mTempBuffer[i] + mTempBuffer[symIdx];
 		lI = mTempBuffer[i] - mTempBuffer[symIdx];
 		ptr[i << 1] = lR;
-		ptr[(i << 1) + 1] = lI;
-	}
-	return indexFw[0] + 2;
-}
-int32_t STFTPolar(float *indexer, float *analysisWnd, float *ptr)
-{
-	int32_t *indexFw = (int32_t*)indexer;
-	float *mSineTab = analysisWnd + indexFw[0] * 2;
-	float *mInput = mSineTab + indexFw[0];
-	float *mTempBuffer = mInput + indexFw[0];
-	uint32_t *bitRevTbl = (uint32_t*)(analysisWnd + (indexFw[0] * 6) + indexFw[3] + indexFw[3]);
-	int32_t i, symIdx;
-	for (i = 0; i < indexFw[0]; ++i)
-		mTempBuffer[bitRevTbl[i]] = mInput[(i + indexFw[4]) & (indexFw[0] - 1)] * analysisWnd[i];
-	discreteHartleyTransformFloat(mTempBuffer, indexFw[0], mSineTab);
-	ptr[0] = fabsf(mTempBuffer[0] * 2.0f);
-	ptr[1] = ((mTempBuffer[0] < 0.0f) ? M_PIDouble : 0.0f);
-	float lR, lI;
-	for (i = 1; i < ((indexFw[0] >> 1) + 1); i++)
-	{
-		symIdx = indexFw[0] - i;
-		lR = mTempBuffer[i] + mTempBuffer[symIdx];
-		lI = mTempBuffer[i] - mTempBuffer[symIdx];
-		ptr[i << 1] = hypotf(lR, lI);
-		ptr[(i << 1) + 1] = atan2f(lI, lR);
+		ptr[(i << 1) + 1] = -lI;
 	}
 	return indexFw[0] + 2;
 }
@@ -654,40 +701,7 @@ int32_t STFTCartesianInverse(float *indexer, float *analysisWnd, float *ptr)
 	for (i = 1; i < ((indexFw[0] >> 1) + 1); i++)
 	{
 		lR = ptr[i << 1];
-		lI = ptr[(i << 1) + 1];
-		timeDomainOut[bitRevTbl[i]] = (lR + lI);
-		timeDomainOut[bitRevTbl[indexFw[0] - i]] = (lR - lI);
-	}
-	discreteHartleyTransformFloat(timeDomainOut, indexFw[0], mSineTab);
-	for (i = 0; i < indexFw[0] - indexFw[2]; i++)
-		timeDomainOut[i] = timeDomainOut[i + indexFw[2]] * synthesisWnd[i];
-	for (i = 0; i < indexFw[3]; ++i)
-	{
-		mOutputBuffer[i] = mOverlapStage2Ldash[i] + timeDomainOut[i];
-		mOverlapStage2Ldash[i] = timeDomainOut[indexFw[3] + i];
-	}
-	return indexFw[3];
-}
-int32_t STFTPolarInverse(float *indexer, float *analysisWnd, float *ptr)
-{
-	int32_t *indexFw = (int32_t*)indexer;
-	float *synthesisWnd = analysisWnd + indexFw[0];
-	float *mSineTab = synthesisWnd + indexFw[0];
-	float *timeDomainOut = mSineTab + indexFw[0] * 3;
-	float *mOutputBuffer = timeDomainOut + indexFw[0];
-	float *mOverlapStage2Ldash = mOutputBuffer + indexFw[3];
-	uint32_t *bitRevTbl = (uint32_t*)(analysisWnd + (indexFw[0] * 6) + indexFw[3] + indexFw[3]);
-	int32_t i;
-	float magnitude = ptr[0];
-	float phase = ptr[1];
-	float lR, lI;
-	timeDomainOut[0] = magnitude * cosf(phase);
-	for (i = 1; i < ((indexFw[0] >> 1) + 1); i++)
-	{
-		magnitude = ptr[i << 1];
-		phase = ptr[(i << 1) + 1];
-		lR = magnitude * cosf(phase);
-		lI = magnitude * sinf(phase);
+		lI = -ptr[(i << 1) + 1];
 		timeDomainOut[bitRevTbl[i]] = (lR + lI);
 		timeDomainOut[bitRevTbl[indexFw[0] - i]] = (lR - lI);
 	}
@@ -715,6 +729,35 @@ static float NSEEL_CGEN_CALL stftInit(void *opaque, INT_PTR num_param, float **p
 	STFT_DynInit(indexFw, stftFloatStruct);
 	return (float)indexFw[3];
 }
+void STFT_SetWnd(int32_t *indexFw, float *stftFloatStruct, float *desired_analysisWnd, float *desired_synthesisWnd)
+{
+	int32_t i;
+	float *synthesisWnd = stftFloatStruct + indexFw[0];
+	for (i = 0; i < indexFw[0]; i++)
+		stftFloatStruct[i] = desired_analysisWnd[i];
+	for (i = 0; i < indexFw[0] - indexFw[2]; i++)
+		synthesisWnd[i] = desired_synthesisWnd[i] * (1.0f / indexFw[0]) * 0.5f;
+}
+static float NSEEL_CGEN_CALL stftSetAsymWnd(void *opaque, INT_PTR num_param, float **parms)
+{
+	compileContext *c = (compileContext *)opaque;
+	float *blocks = c->ram_state;
+	float *start1 = parms[0];
+	int32_t offs1 = (int32_t)(*start1 + NSEEL_CLOSEFACTOR);
+	float *start2 = parms[1];
+	int32_t offs2 = (int32_t)(*start2 + NSEEL_CLOSEFACTOR);
+	float *start3 = parms[2];
+	int32_t offs3 = (int32_t)(*start3 + NSEEL_CLOSEFACTOR);
+	float *start4 = parms[3];
+	int32_t offs4 = (int32_t)(*start4 + NSEEL_CLOSEFACTOR);
+	float *indexer = __NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	float *stftFloatStruct = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	float *desired_analysisWnd = __NSEEL_RAMAlloc(blocks, (uint64_t)offs3);
+	float *desired_synthesisWnd = __NSEEL_RAMAlloc(blocks, (uint64_t)offs4);
+	int32_t *indexFw = (int32_t *)indexer;
+	STFT_SetWnd(indexFw, stftFloatStruct, desired_analysisWnd, desired_synthesisWnd);
+	return 0;
+}
 static float NSEEL_CGEN_CALL stftGetWindowPower(void *opaque, INT_PTR num_param, float **parms)
 {
 	compileContext *c = (compileContext*)opaque;
@@ -741,15 +784,11 @@ static float NSEEL_CGEN_CALL stftForward(void *opaque, INT_PTR num_param, float 
 	int32_t offs2 = (int32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 	float *indexer = __NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
 	float *stftFloatStruct = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
-	int32_t cartesian = (int32_t)(*parms[3]);
 	int32_t *indexFw = (int32_t*)indexer;
 	float *mInput = stftFloatStruct + indexFw[0] * 3;
 	memcpy(&mInput[indexFw[4]], ptr, indexFw[3] * sizeof(float));
 	indexFw[4] = (indexFw[4] + indexFw[3]) & (indexFw[0] - 1);
-	if (cartesian)
-		return (float)STFTCartesian(indexer, stftFloatStruct, ptr);
-	else
-		return (float)STFTPolar(indexer, stftFloatStruct, ptr);
+	return (float)STFTCartesian(indexer, stftFloatStruct, ptr);
 }
 static float NSEEL_CGEN_CALL stftBackward(void *opaque, INT_PTR num_param, float **parms)
 {
@@ -761,13 +800,9 @@ static float NSEEL_CGEN_CALL stftBackward(void *opaque, INT_PTR num_param, float
 	int32_t offs2 = (int32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 	float *indexer = __NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
 	float *stftFloatStruct = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
-	int32_t cartesian = (int32_t)(*parms[3]);
 	int32_t *indexFw = (int32_t*)indexer;
 	int32_t ret;
-	if (cartesian)
-		ret = STFTCartesianInverse(indexer, stftFloatStruct, ptr);
-	else
-		ret = STFTPolarInverse(indexer, stftFloatStruct, ptr);
+	ret = STFTCartesianInverse(indexer, stftFloatStruct, ptr);
 	memcpy(ptr, stftFloatStruct + indexFw[0] * 6, indexFw[3] * sizeof(float));
 	return (float)ret;
 }
@@ -794,6 +829,391 @@ static float NSEEL_CGEN_CALL stftCheckMemoryRequirement(void *opaque, INT_PTR nu
 	int32_t analyOv = (int32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 	return (float)STFT_DynConstructor(indexer, fftlen, analyOv, *parms[3]);
 }
+static inline double ipowp(double x, long n)
+{
+	assert(n >= 0);
+	double z = 1.0;
+	while (n != 0)
+	{
+		if ((n & 1) != 0)
+			z *= x;
+		n >>= 1;
+		x *= x;
+	}
+	return z;
+}
+static inline void compute_transition_param(double *k, double *q, double transition)
+{
+	assert(transition > 0);
+	assert(transition < 0.5);
+	*k = tan((1 - transition * 2) * M_PIDouble / 4);
+	*k *= *k;
+	assert(*k < 1);
+	assert(*k > 0);
+	double         kksqrt = pow(1.0 - *k * *k, 0.25);
+	const double   e = 0.5 * (1 - kksqrt) / (1 + kksqrt);
+	const double   e2 = e * e;
+	const double   e4 = e2 * e2;
+	*q = e * (1 + e4 * (2 + e4 * (15 + 150 * e4)));
+	assert(*q > 0);
+}
+static inline double compute_acc_num(double q, int order, int c)
+{
+	assert(c >= 1);
+	assert(c < order * 2);
+	int            i = 0;
+	int            j = 1;
+	double         acc = 0;
+	double         q_ii1;
+	do
+	{
+		q_ii1 = ipowp(q, i * (i + 1));
+		q_ii1 *= sin((i * 2 + 1) * c * M_PIDouble / order) * j;
+		acc += q_ii1;
+		j = -j;
+		++i;
+	} while (fabs(q_ii1) > 1e-100);
+	return acc;
+}
+static inline double compute_acc_den(double q, int order, int c)
+{
+	assert(c >= 1);
+	assert(c < order * 2);
+	int            i = 1;
+	int            j = -1;
+	double         acc = 0;
+	double         q_i2;
+	do
+	{
+		q_i2 = ipowp(q, i * i);
+		q_i2 *= cos(i * 2 * c * M_PIDouble / order) * j;
+		acc += q_i2;
+		j = -j;
+		++i;
+	} while (fabs(q_i2) > 1e-100);
+	return acc;
+}
+static inline double compute_coef(int index, double k, double q, int order)
+{
+	assert(index >= 0);
+	assert(index * 2 < order);
+	const int      c = index + 1;
+	const double   num = compute_acc_num(q, order, c) * pow(q, 0.25);
+	const double   den = compute_acc_den(q, order, c) + 0.5;
+	const double   ww = num / den;
+	const double   wwsq = ww * ww;
+	const double   x = sqrt((1 - wwsq * k) * (1 - wwsq / k)) / (1 + wwsq);
+	const double   coef = (1 - x) / (1 + x);
+	return coef;
+}
+static inline void compute_coefs_spec_order_tbw(double coef_arr[], int nbr_coefs, double transition)
+{
+	assert(nbr_coefs > 0);
+	assert(transition > 0);
+	assert(transition < 0.5);
+	double         k;
+	double         q;
+	compute_transition_param(&k, &q, transition);
+	const int      order = nbr_coefs * 2 + 1;
+	// Coefficient calculation
+	for (int index = 0; index < nbr_coefs; ++index)
+		coef_arr[index] = compute_coef(index, k, q, order);
+}
+static inline double IIR2thOrder(double *Xi, double *b, double z[2])
+{
+	double Yi = *b * *Xi + z[0];
+	z[0] = z[1];
+	z[1] = *b * Yi - *Xi;
+	return Yi;
+}
+typedef struct
+{
+	unsigned int stages;
+	double *path, *z;
+	double imOld;
+} IIRHilbert;
+static inline void ProcessIIRHilbert(IIRHilbert *hil, double Xi, double *re, double *im)
+{
+	double imTmp;
+	imTmp = *re = Xi;
+	for (unsigned int j = 0; j < hil->stages; j++)
+	{
+		imTmp = IIR2thOrder(&imTmp, &hil->path[j], &hil->z[2 * j]);
+		*re = IIR2thOrder(re, &hil->path[hil->stages + j], &hil->z[hil->stages * 2 + 2 * j]);
+	}
+	*im = hil->imOld;
+	hil->imOld = imTmp;
+}
+static float NSEEL_CGEN_CALL iirHilbertProcess(float *blocks, float *offptr, float *x, float *y)
+{
+	uint32_t offs1 = (uint32_t)(*offptr + NSEEL_CLOSEFACTOR);
+	IIRHilbert *hil = (IIRHilbert *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	uint32_t offs2 = (uint32_t)(*y + NSEEL_CLOSEFACTOR);
+	float *out = (float *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	double re, im;
+	ProcessIIRHilbert(hil, *x, &re, &im);
+	out[0] = re;
+	out[1] = im;
+	return 2;
+}
+static float NSEEL_CGEN_CALL iirHilbertInit(void *opaque, INT_PTR num_param, float **parms)
+{
+	compileContext *c = (compileContext *)opaque;
+	float *blocks = c->ram_state;
+	float *start1 = parms[0];
+	int32_t offs1 = (int32_t)(*start1 + NSEEL_CLOSEFACTOR);
+	IIRHilbert *hil = (IIRHilbert *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	unsigned int numStages = (unsigned int)(*parms[1] + NSEEL_CLOSEFACTOR);
+	float transition = *parms[2];
+	unsigned int numCoefs = numStages << 1;
+	size_t memSize = sizeof(IIRHilbert) + (numCoefs + (numStages << 2)) * sizeof(double);
+	hil->stages = numStages;
+	double *coefs = (double *)malloc(numCoefs * sizeof(double));
+	hil->path = (double*)(hil + 1);
+	hil->z = hil->path + numCoefs;
+	memset(hil->z, 0, (hil->stages << 2) * sizeof(double));
+	compute_coefs_spec_order_tbw(coefs, numCoefs, transition);
+	unsigned int i;
+	// Phase reference path coefficients
+	for (i = 1; i < numCoefs; i += 2)
+		hil->path[i >> 1] = coefs[i];
+	// +90 deg path coefficients
+	for (i = 0; i < numCoefs; i += 2)
+		hil->path[hil->stages + (i >> 1)] = coefs[i];
+	free(coefs);
+	hil->imOld = 0.0;
+	return (float)(1 + memSize / sizeof(float));
+}
+typedef struct
+{
+	float data;
+	float maximum, minimum;
+} node;
+typedef struct
+{
+	unsigned int capacity, top;
+	node *items;
+} stack;
+static inline void insertDat(stack *s2, float val)
+{
+	if (!s2->top)
+	{
+		s2->items[s2->top].data = val;
+		s2->items[s2->top].maximum = val;
+		s2->items[s2->top++].minimum = val;
+	}
+	else
+	{
+		s2->items[s2->top].data = val;
+		s2->items[s2->top].minimum = min(val, s2->items[s2->top - 1].minimum);
+		s2->items[s2->top++].maximum = max(val, s2->items[s2->top - 1].maximum);
+	}
+}
+static inline void removeDat(stack *s1, stack *s2)
+{
+	if (s1->top)
+		s1->top--;
+	else
+	{
+		while (s2->top)
+		{
+			insertDat(s1, s2->items[s2->top - 1].data);
+			s2->top--;
+		}
+		s1->top--;
+	}
+}
+typedef struct mmStk
+{
+	stack s1, s2;
+	unsigned int windowSize, cnt;
+	void(*process)(struct mmStk *stk, float, float *, float *);
+} runningMinMax;
+void ProcessStkMaxLater(runningMinMax *stk, float a, float *minV, float *maxV)
+{
+	removeDat(&stk->s1, &stk->s2);
+	insertDat(&stk->s2, a);
+	// the maximum of both stack will be the maximum of overall window
+	if (stk->s1.top)
+	{
+		*minV = min(stk->s1.items[stk->s1.top - 1].minimum, stk->s2.items[stk->s2.top - 1].minimum);
+		*maxV = max(stk->s1.items[stk->s1.top - 1].maximum, stk->s2.items[stk->s2.top - 1].maximum);
+	}
+	else
+	{
+		*minV = stk->s2.items[stk->s2.top - 1].minimum;
+		*maxV = stk->s2.items[stk->s2.top - 1].maximum;
+	}
+}
+void ProcessStkBeginning(runningMinMax *stk, float a, float *minV, float *maxV)
+{
+	stk->cnt++;
+	if (stk->cnt >= stk->windowSize)
+		stk->process = ProcessStkMaxLater;
+	insertDat(&stk->s2, a);
+	// the maximum of both stack will be the maximum of overall window
+	*minV = stk->s2.items[stk->s2.top - 1].minimum;
+	*maxV = stk->s2.items[stk->s2.top - 1].maximum;
+}
+static float NSEEL_CGEN_CALL movingMinMaxProcess(float *blocks, float *offptr, float *x, float *y)
+{
+	uint32_t offs1 = (uint32_t)(*offptr + NSEEL_CLOSEFACTOR);
+	runningMinMax *stk = (runningMinMax *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	uint32_t offs2 = (uint32_t)(*y + NSEEL_CLOSEFACTOR);
+	float *out = (float *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	float minV = 0, maxV = 0;
+	stk->process(stk, *x, &minV, &maxV);
+	out[0] = minV;
+	out[1] = maxV;
+	return 2;
+}
+static float NSEEL_CGEN_CALL movingMinMaxInit(float *blocks, float *offptr, float *parm1)
+{
+	uint32_t offs1 = (uint32_t)(*offptr + NSEEL_CLOSEFACTOR);
+	runningMinMax *stk = (runningMinMax *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	uint32_t windowSize = (uint32_t)(*parm1 + NSEEL_CLOSEFACTOR);
+	size_t memSize = sizeof(runningMinMax) + sizeof(node) * windowSize * 2;
+	stk->s1.top = 0;
+	stk->s1.capacity = windowSize;
+	stk->s2.top = 0;
+	stk->s2.capacity = windowSize;
+	stk->s1.items = (node*)(stk + 1);
+	stk->s2.items = (node*)(((char*)stk->s1.items) + sizeof(node) * windowSize);
+	stk->windowSize = windowSize;
+	stk->cnt = 0;
+	stk->process = ProcessStkBeginning;
+	return (float)(1 + memSize / sizeof(float));
+}
+#define ItemLess(a,b)  ((a)<(b))
+#define ItemMean(a,b)  (((a)+(b))/2)
+typedef struct
+{
+	float *data;  //circular queue of values
+	int *pos;   //index into `heap` for each value
+	int *heap;  //max/median/min heap holding indexes into `data`.
+	int   N;     //allocated size.
+	int   idx;   //position in circular queue
+	int   ct;    //count of items in queue
+} runningMedian;
+#define minCt(m) (((m)->ct-1)/2) //count of items in minheap
+#define maxCt(m) (((m)->ct)/2)   //count of items in maxheap 
+//returns 1 if heap[i] < heap[j]
+static inline int mmless(runningMedian *m, int i, int j)
+{
+	return ItemLess(m->data[m->heap[i]], m->data[m->heap[j]]);
+}
+//swaps items i&j in heap, maintains indexes
+static inline int mmexchange(runningMedian *m, int i, int j)
+{
+	int t = m->heap[i];
+	m->heap[i] = m->heap[j];
+	m->heap[j] = t;
+	m->pos[m->heap[i]] = i;
+	m->pos[m->heap[j]] = j;
+	return 1;
+}
+//swaps items i&j if i<j;  returns true if swapped
+static inline int mmCmpExch(runningMedian *m, int i, int j)
+{
+	return mmless(m, i, j) && mmexchange(m, i, j);
+}
+//maintains minheap property for all items below i/2.
+static inline void minSortDown(runningMedian *m, int i)
+{
+	for (; i <= minCt(m); i *= 2)
+	{
+		if (i > 1 && i < minCt(m) && mmless(m, i + 1, i))
+			++i;
+		if (!mmCmpExch(m, i, i / 2))
+			break;
+	}
+}
+//maintains maxheap property for all items below i/2. (negative indexes)
+static inline void maxSortDown(runningMedian *m, int i)
+{
+	for (; i >= -maxCt(m); i *= 2)
+	{
+		if (i<-1 && i > -maxCt(m) && mmless(m, i, i - 1))
+			--i;
+		if (!mmCmpExch(m, i / 2, i))
+			break;
+	}
+}
+//maintains minheap property for all items above i, including median
+//returns true if median changed
+static inline int minSortUp(runningMedian *m, int i)
+{
+	while (i > 0 && mmCmpExch(m, i, i / 2))
+		i /= 2;
+	return i == 0;
+}
+//maintains maxheap property for all items above i, including median
+//returns true if median changed
+static inline int maxSortUp(runningMedian *m, int i)
+{
+	while (i < 0 && mmCmpExch(m, i / 2, i))
+		i /= 2;
+	return i == 0;
+}
+//Inserts item, maintains median in O(lg nItems)
+float runningMedianInsert(runningMedian *m, float v)
+{
+	int isNew = (m->ct < m->N);
+	int p = m->pos[m->idx];
+	float old = m->data[m->idx];
+	m->data[m->idx] = v;
+	m->idx = (m->idx + 1) % m->N;
+	m->ct += isNew;
+	if (p > 0) //new item is in minHeap
+	{
+		if (!isNew && ItemLess(old, v))
+			minSortDown(m, p * 2);
+		else if (minSortUp(m, p))
+			maxSortDown(m, -1);
+	}
+	else if (p < 0) //new item is in maxheap
+	{
+		if (!isNew && ItemLess(v, old))
+			maxSortDown(m, p * 2);
+		else if (maxSortUp(m, p))
+			minSortDown(m, 1);
+	}
+	else //new item is at median
+	{
+		if (maxCt(m))
+			maxSortDown(m, -1);
+		if (minCt(m))
+			minSortDown(m, 1);
+	}
+	v = m->data[m->heap[0]];
+	if ((m->ct & 1) == 0)
+		v = ItemMean(v, m->data[m->heap[-1]]);
+	return v;
+}
+static float NSEEL_CGEN_CALL movingMedianProcess(float *blocks, float *offptr, float *x)
+{
+	uint32_t offs1 = (uint32_t)(*offptr + NSEEL_CLOSEFACTOR);
+	runningMedian *m = (runningMedian *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	return runningMedianInsert(m, *x);
+}
+static float NSEEL_CGEN_CALL movingMedianInit(float *blocks, float *offptr, float *parm1)
+{
+	uint32_t offs1 = (uint32_t)(*offptr + NSEEL_CLOSEFACTOR);
+	runningMedian *m = (runningMedian *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	uint32_t windowSize = (uint32_t)(*parm1 + NSEEL_CLOSEFACTOR);
+	size_t memSize = sizeof(runningMedian) + windowSize * (sizeof(float) + sizeof(int) * 2);
+	m->data = (float *)(m + 1);
+	m->pos = (int *)(m->data + windowSize);
+	m->heap = m->pos + windowSize + (windowSize / 2); //points to middle of storage.
+	m->N = windowSize;
+	m->ct = m->idx = 0;
+	while (windowSize--)  //set up initial heap fill pattern: median,max,min,max,...
+	{
+		m->pos[windowSize] = ((windowSize + 1) / 2) * ((windowSize & 1) ? -1 : 1);
+		m->heap[m->pos[windowSize]] = windowSize;
+	}
+	return (float)(1 + memSize / sizeof(float));
+}
 void runStateArburg(double *Z, double *b, double x, int n)
 {
 	for (int j = 1; j < n; j++) // Update conditions
@@ -808,13 +1228,13 @@ double predictArburg(double *Z, double *a, int n)
 	Z[n - 1] = -a[n] * Yi;
 	return Yi; // Write to output
 }
-void TrainArburg(char *bg, float *xn, unsigned int xLen)
+void TrainArburg(char *bg, float *xn, int positionStart, int positionEnd)
 {
 	unsigned int i, j;
 	char getPredictionState = *bg;
 	unsigned int *flag = (unsigned int*)(bg + 1);
 	const unsigned int _mCoefficientsNumber = *flag;
-	unsigned int lenM1 = xLen - 1;
+	int to = positionEnd + 1;
 
 	// Creates internal variables with desirable length
 	double *predictionCoefficients = (double*)(flag + 1);
@@ -836,12 +1256,12 @@ void TrainArburg(char *bg, float *xn, unsigned int xLen)
 	for (j = 0; j <= _mCoefficientsNumber; j++)
 	{
 		_c[j] = 0.0;
-		for (i = 0; i < xLen - j; i++)
-			_c[j] += xn[i] * xn[i + j];
+		for (i = 0; i <= positionEnd - j; i++)
+			_c[j] += xn[i + positionStart] * xn[i + positionStart + j];
 	}
 	unsigned int _iIterationCounter = 0;
 	predictionCoefficients[0] = 1.0;
-	_g[0] = 2.0 * _c[0] - fabs(xn[0]) * fabs(xn[0]) - fabs(xn[lenM1]) * fabs(xn[lenM1]);
+	_g[0] = 2.0 * _c[0] - fabs(xn[0 + positionStart]) * fabs(xn[0 + positionStart]) - fabs(xn[positionEnd + positionStart]) * fabs(xn[positionEnd + positionStart]);
 	_g[1] = 2.0 * _c[1];
 	// the paper says r[1], error in paper?
 	_r[0] = 2.0 * _c[1];
@@ -850,13 +1270,16 @@ void TrainArburg(char *bg, float *xn, unsigned int xLen)
 	{
 		// Computes vector of reflection coefficients. For details see step 1 of algorithm on page 3 of the paper
 		double nominator = 0.0;
-		double denominator = (double)FLT_EPSILON;
+		double denominator = ((double)FLT_EPSILON) * 100.0;
 		for (i = 0; i <= _iIterationCounter + 1; i++)
 		{
 			nominator += predictionCoefficients[i] * _g[(_iIterationCounter + 1) - i];
 			denominator += predictionCoefficients[i] * _g[i];
 		}
-		reflectionCoefficient[_iIterationCounter] = -nominator / denominator;
+		if (fabs(nominator) < ((double)FLT_EPSILON) * 10.0 && fabs(denominator) < ((double)FLT_EPSILON) * 10.0)
+			reflectionCoefficient[_iIterationCounter] = -1.0 + FLT_EPSILON;
+		else
+			reflectionCoefficient[_iIterationCounter] = -nominator / denominator;
 		// Updates vector of prediction coefficients. For details see step 2 of algorithm on page 3 of the paper
 		memcpy(tmp, predictionCoefficients, (_mCoefficientsNumber + 1) * sizeof(double));
 		for (i = 0; i <= _iIterationCounter + 1; i++)
@@ -868,10 +1291,11 @@ void TrainArburg(char *bg, float *xn, unsigned int xLen)
 			{
 				memset(forwardState, 0, (_mCoefficientsNumber + 1) * sizeof(double));
 				memset(backwardState, 0, (_mCoefficientsNumber + 1) * sizeof(double));
-				for (i = 0; i < xLen; i++)
+				int idx2 = to - 1 + positionStart;
+				for (int i = positionStart; i < to; i++)
 				{
 					runStateArburg(forwardState, predictionCoefficients, xn[i], _mCoefficientsNumber); // Forward
-					runStateArburg(backwardState, predictionCoefficients, xn[lenM1 - i], _mCoefficientsNumber); // Backward
+					runStateArburg(backwardState, predictionCoefficients, xn[idx2 - i], _mCoefficientsNumber); // Backward
 				}
 			}
 			break;
@@ -879,22 +1303,22 @@ void TrainArburg(char *bg, float *xn, unsigned int xLen)
 		// Updates vector r. For details see step 5 of algorithm on page 3 of the paper
 		memcpy(tmp, _r, (_mCoefficientsNumber + 1) * sizeof(double));
 		for (i = 0; i <= _iIterationCounter - 1; i++)
-			_r[i + 1] = tmp[i] - xn[i] * xn[_iIterationCounter] - xn[lenM1 - i] * xn[lenM1 - _iIterationCounter];
+			_r[i + 1] = tmp[i] - xn[i + positionStart] * xn[_iIterationCounter + positionStart] - xn[positionEnd - i + positionStart] * xn[positionEnd - _iIterationCounter + positionStart];
 		_r[0] = 2.0 * _c[_iIterationCounter + 1];
 
 		// Calculates vector deltaRAndAProduct. For details see step 6 of algorithm on page 3 of the paper
-		unsigned int posEnd = lenM1 - _iIterationCounter;
-		unsigned int _iIterationCounterA1 = _iIterationCounter + 1;
+		int posBegin = _iIterationCounter;
+		int posEnd = positionEnd - _iIterationCounter;
 		for (i = 0; i <= _iIterationCounter; i++)
 		{
 			double innerProduct1 = 0.0;
 			double innerProduct2 = 0.0;
 			for (j = 0; j <= _iIterationCounter; j++)
 			{
-				innerProduct1 += xn[_iIterationCounter - j] * predictionCoefficients[j];
-				innerProduct2 += xn[posEnd + j] * predictionCoefficients[j];
+				innerProduct1 += xn[posBegin - j + positionStart] * predictionCoefficients[j];
+				innerProduct2 += xn[posEnd + j + positionStart] * predictionCoefficients[j];
 			}
-			_deltaRAndAProduct[i] = -xn[_iIterationCounter - i] * innerProduct1 - xn[posEnd + i] * innerProduct2;
+			_deltaRAndAProduct[i] = -xn[posBegin - i + positionStart] * innerProduct1 - xn[posEnd + i + positionStart] * innerProduct2;
 		}
 		// Updates vector g. For details see step 7 of algorithm on page 3 of the paper
 		memcpy(tmp, _g, (_mCoefficientsNumber + 2) * sizeof(double));
@@ -923,29 +1347,9 @@ static float NSEEL_CGEN_CALL arburgTrainModel(void *opaque, INT_PTR num_param, f
 	*burg = (char)(*parms[2] + NSEEL_CLOSEFACTOR);
 	unsigned int *flag = (unsigned int*)(burg + 1);
 	*flag = (unsigned int)(*parms[1] + NSEEL_CLOSEFACTOR);
-	uint32_t xLen = (uint32_t)(*parms[4] + NSEEL_CLOSEFACTOR);
-	TrainArburg(burg, xn, xLen);
-	return 0.0f;
-}
-static float NSEEL_CGEN_CALL arburgGetPredictionReflectionCoeff(void *opaque, INT_PTR num_param, float **parms)
-{
-	compileContext *c = (compileContext*)opaque;
-	float *blocks = c->ram_state;
-	int32_t offs = (int32_t)(*parms[0] + NSEEL_CLOSEFACTOR);
-	char *bg = (char*)__NSEEL_RAMAlloc(blocks, (uint64_t)offs);
-	int32_t offs1 = (int32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
-	float *pdC = __NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
-	int32_t offs2 = (int32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
-	float *rfC = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
-	unsigned int *flag = (unsigned int*)(bg + 1);
-	const unsigned int _mCoefficientsNumber = *flag;
-	double *predictionCoefficients = (double*)(flag + 1);
-	double *reflectionCoefficient = predictionCoefficients + (_mCoefficientsNumber + 1);
-	for (unsigned int i = 0; i < _mCoefficientsNumber + 1; i++)
-	{
-		pdC[i] = (float)predictionCoefficients[i];
-		rfC[i] = (float)reflectionCoefficient[i];
-	}
+	int32_t from = (int32_t)(*parms[4] + NSEEL_CLOSEFACTOR);
+	int32_t to = (int32_t)(*parms[5] + NSEEL_CLOSEFACTOR);
+	TrainArburg(burg, xn, from, to);
 	return 0.0f;
 }
 static float NSEEL_CGEN_CALL arburgPredictBackward(float *blocks, float *start)
@@ -1195,7 +1599,7 @@ static float NSEEL_CGEN_CALL  eel_max(float *blocks, float *start, float *length
 	float ma = ptr[0];
 	for (uint32_t i = 1; i < (uint32_t)(*length + NSEEL_CLOSEFACTOR); i++)
 	{
-		if (ptr[i] > ma)
+		if (fabsf(ptr[i]) > fabsf(ma))
 			ma = ptr[i];
 	}
 	return ma;
@@ -1206,7 +1610,7 @@ static float NSEEL_CGEN_CALL  eel_min(float *blocks, float *start, float *length
 	float mi = ptr[0];
 	for (uint32_t i = 1; i < (uint32_t)(*length + NSEEL_CLOSEFACTOR); i++)
 	{
-		if (ptr[i] < mi)
+		if (fabsf(ptr[i]) < fabsf(mi))
 			mi = ptr[i];
 	}
 	return mi;
@@ -1312,7 +1716,7 @@ static float * NSEEL_CGEN_CALL eel_convolve_c(float *blocks, float *dest, float 
 	WDL_fft_complexmul((WDL_FFT_COMPLEX*)destptr, (WDL_FFT_COMPLEX*)srcptr, (len / 2)&~1);
 	return dest;
 }
-int32_t nseel_stringsegments_tobuf(char *bufOut, int32_t bufout_sz, eelStringSegmentRec *list) // call with NULL to calculate size, or non-null to generate to buffer (returning size used)
+static inline int32_t nseel_stringsegments_tobuf(char *bufOut, int32_t bufout_sz, eelStringSegmentRec *list) // call with NULL to calculate size, or non-null to generate to buffer (returning size used)
 {
 	int32_t pos = 0;
 	while (list)
@@ -1328,97 +1732,164 @@ int32_t nseel_stringsegments_tobuf(char *bufOut, int32_t bufout_sz, eelStringSeg
 	}
 	return pos;
 }
-void Initeel_string_context_state(eel_string_context_state *st)
+static inline void eelThread_start(abstractThreads *info)
 {
-	st->inuse = 0;
-	st->slot = 2;
-	st->map = (int32_t*)malloc(st->slot * sizeof(s_str));
-	st->m_literal_strings = (s_str*)malloc(st->slot * sizeof(s_str));
-	for (int32_t i = 0; i < st->slot; i++)
+	// ensure worker is waiting
+	pthread_mutex_lock(&(info->work_mtx));
+	// set job information & state
+	info->state = EEL_WORKING;
+	// wake-up signal
+	pthread_cond_signal(&(info->work_cond));
+	pthread_mutex_unlock(&(info->work_mtx));
+}
+static inline void eelThread_wait(abstractThreads *info)
+{
+	while (1)
 	{
-		st->map[i] = 0;
-		st->m_literal_strings[i] = 0;
+		pthread_cond_wait(&(info->boss_cond), &(info->boss_mtx));
+		if (EEL_IDLE == info->state)
+			break;
 	}
 }
-void Freeel_string_context_state(eel_string_context_state *st)
+void* GetStringForIndex(eel_builtin_memRegion *st, float val, int32_t write)
 {
-	for (int32_t i = 0; i < st->slot; i++)
-		s_str_destroy(&st->m_literal_strings[i]);
-	free(st->map);
-	free(st->m_literal_strings);
-	st->slot = 0;
-	st->inuse = 0;
-}
-int32_t arySearch(int32_t *array, int32_t N, int32_t x)
-{
-	for (int32_t i = 0; i < N; i++)
-	{
-		if (array[i] == x)
-			return i;
-	}
-	return -1;
-}
-#define FLOIDX 20000
-void* GetStringForIndex(eel_string_context_state *st, float val, int32_t write)
-{
-	int32_t castedValue = (int32_t)(val + 0.5f);
-	if (castedValue < FLOIDX)
-		return 0;
-	int32_t idx = arySearch(st->map, st->slot, castedValue);
-	if (idx < 0)
-		return 0;
+	int32_t idx = (int32_t)(val + 0.5f);
 	if (!write)
 	{
-		s_str *tmp = &st->m_literal_strings[idx];
+		s_str *tmp = &st->memRegion[idx];
 		const char *s = s_str_c_str(tmp);
 		return (void*)s;
 	}
 	else
-		return (void*)&st->m_literal_strings[idx];
+		return (void*)&st->memRegion[idx];
 }
-int32_t AddString(eel_string_context_state *st, char *ns)
+static inline int32_t getEmptyRegion(eel_builtin_memRegion *st)
 {
-	const int32_t l = strlen(ns);
 	int32_t x;
-	for (x = 0; x < st->inuse; x++)
-	{
-		s_str *tmp = &st->m_literal_strings[x];
-		const char *s = s_str_c_str(tmp);
-		if (strlen(s) == l && !strcmp(s, ns))
+	for (x = 0; x < st->slot; x++)
+		if (!st->memRegion[x])
 			break;
-	}
-	if (x < st->inuse)
-		free(ns);
-	else
+	if (st->inuse > (st->slot - 1))
 	{
-		int32_t currentSlot = st->inuse;
-		if (currentSlot > (st->slot - 1))
+		st->slot += 10;
+		st->memRegion = (void**)realloc(st->memRegion, st->slot * sizeof(void*));
+		st->memRegion[st->inuse] = 0;
+		st->type = (char*)realloc(st->type, st->slot * sizeof(char));
+		for (int32_t i = st->inuse; i < st->slot; i++)
 		{
-			st->slot++;
-			st->m_literal_strings = (s_str*)realloc(st->m_literal_strings, st->slot * sizeof(s_str));
-			st->m_literal_strings[st->inuse] = 0;
-			st->map = (int32_t*)realloc(st->map, st->slot * sizeof(int32_t));
-			st->map[st->inuse] = 0;
+			st->memRegion[i] = 0;
+			st->type[i] = 0;
 		}
-		st->m_literal_strings[st->inuse] = s_str_create_from_c_str(ns);
-		st->map[st->inuse] = x + FLOIDX;
-		st->inuse++;
+	}
+	st->inuse++;
+	return x;
+}
+void DeleteSlot(eel_builtin_memRegion *st, float val)
+{
+	int32_t idx = (int32_t)(val + 0.5f);
+	if (!st->memRegion[idx])
+		goto decrement;
+	if (st->type[idx] == 0)
+		s_str_destroy(&st->memRegion[idx]);
+	else if (st->type[idx] == 1)
+	{
+		FFTConvolver1x1 *conv = (FFTConvolver1x1 *)st->memRegion[idx];
+		FFTConvolver1x1Free(conv);
+		free(conv);
+	}
+	else if (st->type[idx] == 2)
+	{
+		FFTConvolver2x2 *conv = (FFTConvolver2x2 *)st->memRegion[idx];
+		FFTConvolver2x2Free(conv);
+		free(conv);
+	}
+	else if (st->type[idx] == 3)
+	{
+		FFTConvolver2x4x2 *conv = (FFTConvolver2x4x2 *)st->memRegion[idx];
+		FFTConvolver2x4x2Free(conv);
+		free(conv);
+	}
+	else if (st->type[idx] == 4)
+	{
+		abstractThreads *ptr = (abstractThreads *)st->memRegion[idx];
+		// ensure the worker is waiting
+		if (ptr->state == EEL_WORKING)
+			eelThread_wait(ptr);
+		pthread_mutex_lock(&(ptr->work_mtx));
+		ptr->state = EEL_GET_OFF_FROM_WORK;
+		// wake-up signal
+		pthread_cond_signal(&(ptr->work_cond));
+		pthread_mutex_unlock(&(ptr->work_mtx));
+		// wait for thread to exit
+		pthread_join(ptr->threadID, NULL);
+		pthread_mutex_destroy(&(ptr->work_mtx));
+		pthread_cond_destroy(&(ptr->work_cond));
+		pthread_mutex_unlock(&(ptr->boss_mtx));
+		pthread_mutex_destroy(&(ptr->boss_mtx));
+		pthread_cond_destroy(&(ptr->boss_cond));
+		NSEEL_code_free(ptr->codePtr);
+		free(ptr);
+	}
+	else
+		free(st->memRegion[idx]);
+	st->memRegion[idx] = 0;
+decrement:
+	st->inuse--;
+}
+void FreeRegion_context(eel_builtin_memRegion *st)
+{
+	for (int32_t i = 0; i < st->slot; i++)
+		DeleteSlot(st, (float)i + 0.1f);
+	free(st->type);
+	free(st->memRegion);
+	st->slot = 0;
+	st->inuse = 0;
+}
+int32_t AddData(eel_builtin_memRegion *st, void *ns, char type)
+{
+	int32_t x = getEmptyRegion(st);
+	if (type == 0)
+	{
+		st->memRegion[x] = s_str_create_from_c_str((char *)ns);
 		free(ns);
 	}
-	return x + FLOIDX;
+	else
+		st->memRegion[x] = ns;
+	st->type[x] = type;
+	return x;
 }
 static float addStringCallback(void *opaque, eelStringSegmentRec *list)
 {
 	compileContext *c = (compileContext*)opaque;
-	eel_string_context_state *_this = c->m_string_context;
 	// could probably do a faster implementation using AddRaw() etc but this should also be OK
 	int32_t sz = nseel_stringsegments_tobuf(NULL, 0, list);
 	char *ns = (char*)malloc(sz + 32);
 	memset(ns, 0, sz + 32);
 	sz = nseel_stringsegments_tobuf(ns, sz, list) + 1;
 	ns = (char*)realloc(ns, sz);
-	int32_t id = AddString(_this, ns);
+	int32_t id = AddData(c->region_context, (void*)ns, 0);
 	return (float)id;
+}
+static const xpr *xConstant[19] = { &xZero, &xOne, &xTwo, &xTen, &xPinf, &xMinf, &xNaN, &xPi, &xPi2, &xPi4, &xEe, &xSqrt2, &xLn2, &xLn10, &xLog2_e, &xLog2_10, &xLog10_e, &HPA_MIN, &HPA_MAX };
+static const char xVarName[19][10] = { "$hZero", "$hOne", "$hTwo", "$hTen", "$hPinf", "$hMinf", "$hNaN", "$hPi", "$hPi2", "$hPi4", "$hEe", "$hSqrt2", "$hLn2", "$hLn10", "$hLog2_e", "$hLog2_10", "$hLog10_e", "$HPA_MIN", "$HPA_MAX" };
+static inline void InitRegion_context(eel_builtin_memRegion *st)
+{
+	st->inuse = 0;
+	st->slot = 30;
+	st->type = (char *)malloc(st->slot * sizeof(char));
+	st->memRegion = (s_str *)malloc(st->slot * sizeof(s_str));
+	for (int32_t i = 0; i < st->slot; i++)
+	{
+		st->type[i] = 0;
+		st->memRegion[i] = 0;
+	}
+	for (int32_t i = 0; i < 19; i++)
+	{
+		xpr br = *xConstant[i];
+		void *ptr = malloc(sizeof(xpr));
+		memcpy(ptr, (void *)&br, sizeof(xpr));
+		int32_t id = AddData(st, ptr, 5);
+	}
 }
 static int32_t eel_string_match(compileContext *c, const char *fmt, const char *msg, int32_t match_fmt_pos, int32_t ignorecase, const char *fmt_endptr, const char *msg_endptr, int32_t num_fmt_parms, float **fmt_parms)
 {
@@ -1514,7 +1985,7 @@ static int32_t eel_string_match(compileContext *c, const char *fmt, const char *
 				{
 					if (varOut == &vv) // %{#foo}c
 					{
-						s_str *wr = (s_str*)GetStringForIndex(c->m_string_context, vv, 1);
+						s_str *wr = (s_str*)GetStringForIndex(c->region_context, vv, 1);
 						if (wr)
 							s_str_destroy(wr);
 						*wr = s_str_create_from_c_str(msg);
@@ -1585,7 +2056,7 @@ static int32_t eel_string_match(compileContext *c, const char *fmt, const char *
 				{
 					if (fmt_char == 's')
 					{
-						s_str *wr = (s_str*)GetStringForIndex(c->m_string_context, *varOut, 1);
+						s_str *wr = (s_str*)GetStringForIndex(c->region_context, *varOut, 1);
 						if (wr)
 							s_str_destroy(wr);
 						if (wr)
@@ -1622,7 +2093,7 @@ static int32_t eel_string_match(compileContext *c, const char *fmt, const char *
 						lstrcpyn_safe(tmp, msg, min(len + 1, (int32_t)sizeof(tmp)));
 						if (varOut == &vv)
 						{
-							s_str *wr = (s_str*)GetStringForIndex(c->m_string_context, vv, 1);
+							s_str *wr = (s_str*)GetStringForIndex(c->region_context, vv, 1);
 							if (wr)
 								s_str_destroy(wr);
 							*wr = s_str_create_from_c_str(tmp);
@@ -1651,13 +2122,40 @@ static int32_t eel_string_match(compileContext *c, const char *fmt, const char *
 		}
 	}
 }
+static float NSEEL_CGEN_CALL getCosineWindows(void *opaque, INT_PTR num_param, float **parms)
+{
+	compileContext *c = (compileContext *)opaque;
+	float *blocks = c->ram_state;
+	float *start1 = parms[0];
+	int32_t offs2 = (int32_t)(*start1 + NSEEL_CLOSEFACTOR);
+	float *indexer = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	float *fmt_index = parms[2];
+	const char *fmt = (const char *)GetStringForIndex(c->region_context, *fmt_index, 0);
+	float *start2 = parms[1];
+	genWnd(indexer, (int32_t)(*start2 + NSEEL_CLOSEFACTOR), fmt);
+	return 0;
+}
+static float NSEEL_CGEN_CALL getAsymmetricCosine(void *opaque, INT_PTR num_param, float **parms)
+{
+	compileContext *c = (compileContext *)opaque;
+	float *blocks = c->ram_state;
+	uint32_t offs1 = (uint32_t)(*parms[0] + NSEEL_CLOSEFACTOR);
+	float *analysisWnd = __NSEEL_RAMAlloc(blocks, (uint64_t)offs1);
+	uint32_t offs2 = (uint32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
+	float *synthesisWnd = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	int32_t fftlen = (int32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
+	int32_t ovpSmps = (int32_t)(*parms[3] + NSEEL_CLOSEFACTOR);
+	float tf_res = *parms[4];
+	getAsymmetricWindow(analysisWnd, synthesisWnd, fftlen, ovpSmps, tf_res);
+	return 0;
+}
 static float NSEEL_CGEN_CALL _eel_match(void *opaque, INT_PTR num_parms, float **parms)
 {
 	if (num_parms >= 2)
 	{
 		compileContext *c = (compileContext*)opaque;
-		const char *fmt = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
-		const char *msg = (const char*)GetStringForIndex(c->m_string_context, *parms[1], 0);
+		const char *fmt = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
+		const char *msg = (const char*)GetStringForIndex(c->region_context, *parms[1], 0);
 		if (fmt && msg)
 			return eel_string_match(c, fmt, msg, 0, 0, fmt + strlen(fmt), msg + strlen(msg), (int32_t)num_parms - 2, parms + 2) ? 1.0f : 0.0f;
 	}
@@ -1668,8 +2166,8 @@ static float NSEEL_CGEN_CALL _eel_matchi(void *opaque, INT_PTR num_parms, float 
 	if (num_parms >= 2)
 	{
 		compileContext *c = (compileContext*)opaque;
-		const char *fmt = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
-		const char *msg = (const char*)GetStringForIndex(c->m_string_context, *parms[1], 0);
+		const char *fmt = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
+		const char *msg = (const char*)GetStringForIndex(c->region_context, *parms[1], 0);
 		if (fmt && msg)
 			return eel_string_match(opaque, fmt, msg, 0, 1, fmt + strlen(fmt), msg + strlen(msg), (int32_t)num_parms - 2, parms + 2) ? 1.0f : 0.0f;
 	}
@@ -1687,7 +2185,7 @@ static int32_t eel_validate_format_specifier(const char *fmt_in, char *typeOut, 
 	{
 		const char c = *fmt++;
 		if (fmtOut_sz < 2) return 0;
-		if (c == 'f' || c == 'e' || c == 'E' || c == 'g' || c == 'G' || c == 'd' || c == 'u' || c == 'x' || c == 'X' || c == 'c' || c == 'C' || c == 's' || c == 'S' || c == 'i')
+		if (c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == 'g' || c == 'G' || c == 'd' || c == 'u' || c == 'x' || c == 'X' || c == 'c' || c == 'C' || c == 's' || c == 'S' || c == 'i')
 		{
 			*typeOut = c;
 			fmtOut[0] = c;
@@ -1751,14 +2249,24 @@ int32_t eel_format_strings(void *opaque, const char *fmt, const char *fmt_end, c
 			float v = varptr ? (float)*varptr : 0.0f;
 			if (ct == 'x' || ct == 'X' || ct == 'd' || ct == 'u' || ct == 'i')
 			{
-				stbsp_snprintf(op, 64, fs, (int32_t)(v));
+				stbsp_snprintf(op, 128, fs, (int32_t)(v));
 			}
 			else if (ct == 's' || ct == 'S')
 			{
 				compileContext *c = (compileContext*)opaque;
-				const char *str = (const char*)GetStringForIndex(c->m_string_context, v, 0);
+				const char *str = (const char*)GetStringForIndex(c->region_context, v, 0);
 				const size_t maxl = (size_t)(buf + buf_sz - 2u - op);
 				stbsp_snprintf(op, maxl, fs, str ? str : "");
+			}
+			else if (ct == 'F')
+			{
+				compileContext *c = (compileContext*)opaque;
+				int32_t idx = (int32_t)(v + NSEEL_CLOSEFACTOR);
+				xpr *br = (xpr *)c->region_context->memRegion[idx];
+				char *str = xpr_asprint(*br, 1, 0, (XDIM * 48) / 10 - 2);
+				int maxl = strlen(str);
+				stbsp_snprintf(op, min(maxl + 1, 128), "%s", str ? str : "");
+				free(str);
 			}
 			else if (ct == 'c')
 			{
@@ -1781,7 +2289,7 @@ int32_t eel_format_strings(void *opaque, const char *fmt, const char *fmt_end, c
 				*op = 0;
 			}
 			else
-				stbsp_snprintf(op, 64, fs, v);
+				stbsp_snprintf(op, 128, fs, v);
 			while (*op) op++;
 			fmt += l;
 		}
@@ -1796,7 +2304,7 @@ float NSEEL_CGEN_CALL _eel_printf(void *opaque, INT_PTR num_param, float **parms
 	if (num_param > 0)
 	{
 		compileContext *c = (compileContext*)opaque;
-		const char *fmt = (const char*)GetStringForIndex(c->m_string_context, *(parms[0]), 0);
+		const char *fmt = (const char*)GetStringForIndex(c->region_context, *(parms[0]), 0);
 		if (fmt)
 		{
 			int32_t stringLength = strlen(fmt);
@@ -1825,10 +2333,10 @@ float NSEEL_CGEN_CALL _eel_sprintf(void *opaque, INT_PTR num_param, float **parm
 	if (num_param > 0)
 	{
 		compileContext *c = (compileContext*)opaque;
-		s_str *wr = (s_str*)GetStringForIndex(c->m_string_context, *(parms[0]), 1);
+		s_str *wr = (s_str*)GetStringForIndex(c->region_context, *(parms[0]), 1);
 		if (wr)
 			s_str_destroy(wr);
-		const char *fmt = (const char*)GetStringForIndex(c->m_string_context, *(parms[1]), 0);
+		const char *fmt = (const char*)GetStringForIndex(c->region_context, *(parms[1]), 0);
 		if (wr && fmt)
 		{
 			int32_t stringLength = strlen(fmt);
@@ -1882,8 +2390,8 @@ static float _eel_strcmp_int(const char *a, int32_t a_len, const char *b, int32_
 static float NSEEL_CGEN_CALL _eel_strncmp(void *opaque, float *aa, float *bb, float *maxlen)
 {
 	compileContext *c = (compileContext*)opaque;
-	const char *a = (const char*)GetStringForIndex(c->m_string_context, *aa, 0);
-	const char *b = (const char*)GetStringForIndex(c->m_string_context, *bb, 0);
+	const char *a = (const char*)GetStringForIndex(c->region_context, *aa, 0);
+	const char *b = (const char*)GetStringForIndex(c->region_context, *bb, 0);
 	if (!a || !b)
 	{
 		const char *badStr = "strncmp: bad specifier(s)";
@@ -1900,8 +2408,8 @@ static float NSEEL_CGEN_CALL _eel_strncmp(void *opaque, float *aa, float *bb, fl
 static float NSEEL_CGEN_CALL _eel_strnicmp(void *opaque, float *aa, float *bb, float *maxlen)
 {
 	compileContext *c = (compileContext*)opaque;
-	const char *a = (const char*)GetStringForIndex(c->m_string_context, *aa, 0);
-	const char *b = (const char*)GetStringForIndex(c->m_string_context, *bb, 0);
+	const char *a = (const char*)GetStringForIndex(c->region_context, *aa, 0);
+	const char *b = (const char*)GetStringForIndex(c->region_context, *bb, 0);
 	if (!a || !b)
 	{
 		const char *badStr = "strnicmp: bad specifier(s)";
@@ -1926,7 +2434,7 @@ static float NSEEL_CGEN_CALL _eel_stricmp(void *opaque, float *strOut, float *fm
 static float NSEEL_CGEN_CALL _eel_strlen(void *opaque, float *fmt_index)
 {
 	compileContext *c = (compileContext*)opaque;
-	const char *fmt = (const char*)GetStringForIndex(c->m_string_context, *fmt_index, 0);
+	const char *fmt = (const char*)GetStringForIndex(c->region_context, *fmt_index, 0);
 	if (fmt)
 		return (float)strlen(fmt);
 	return 0.0f;
@@ -1961,7 +2469,7 @@ static float NSEEL_CGEN_CALL _eel_cd(void *opaque, float *fmt_index)
 	if (opaque)
 	{
 		compileContext *c = (compileContext*)opaque;
-		const char *fmt = (const char*)GetStringForIndex(c->m_string_context, *fmt_index, 0);
+		const char *fmt = (const char*)GetStringForIndex(c->region_context, *fmt_index, 0);
 		if (fmt)
 #ifdef _WIN32
 			return (float)_chdir(fmt);
@@ -1977,7 +2485,7 @@ static float NSEEL_CGEN_CALL _eel_eval(void *opaque, float *s)
 	NSEEL_CODEHANDLE ch = NULL;
 	if (r)
 	{
-		const char *str = (const char*)GetStringForIndex(r->m_string_context, *s, 0);
+		const char *str = (const char*)GetStringForIndex(r->region_context, *s, 0);
 		if (!str)
 		{
 			const char *badStr = "eval() passed invalid string handle\n";
@@ -2009,7 +2517,7 @@ static float NSEEL_CGEN_CALL _eel_evalFile(void *opaque, float *s)
 	compileContext *r = (compileContext*)opaque;
 	if (r)
 	{
-		const char *str = (const char*)GetStringForIndex(r->m_string_context, *s, 0);
+		const char *str = (const char*)GetStringForIndex(r->region_context, *s, 0);
 		if (!str)
 		{
 			const char *badStr = "eval() passed invalid string handle\n";
@@ -2059,10 +2567,10 @@ static float NSEEL_CGEN_CALL _eel_base64_encode(void *opaque, float *destination
 	if (opaque)
 	{
 		compileContext *c = (compileContext*)opaque;
-		s_str *dest = (s_str*)GetStringForIndex(c->m_string_context, *destination, 1);
+		s_str *dest = (s_str*)GetStringForIndex(c->region_context, *destination, 1);
 		if (dest)
 			s_str_destroy(dest);
-		s_str *srcClass = (s_str*)GetStringForIndex(c->m_string_context, *source, 1);
+		s_str *srcClass = (s_str*)GetStringForIndex(c->region_context, *source, 1);
 		size_t len = (size_t)(*maxlen + NSEEL_CLOSEFACTOR);
 		if (len > s_str_capacity(srcClass))
 			return -1;
@@ -2130,8 +2638,8 @@ static float NSEEL_CGEN_CALL _eel_base64_encodeBinaryToTextFile(void *opaque, fl
 	if (opaque)
 	{
 		compileContext *c = (compileContext*)opaque;
-		const char *dest = (const char*)GetStringForIndex(c->m_string_context, *destination, 0);
-		const char *src = (const char *)GetStringForIndex(c->m_string_context, *source, 0);
+		const char *dest = (const char*)GetStringForIndex(c->region_context, *destination, 0);
+		const char *src = (const char *)GetStringForIndex(c->region_context, *source, 0);
 		if (dest && src)
 		{
 			unsigned char *buffer = 0;
@@ -2172,10 +2680,10 @@ static float NSEEL_CGEN_CALL _eel_base64_decode(void *opaque, float *destination
 	if (opaque)
 	{
 		compileContext *c = (compileContext*)opaque;
-		s_str *dest = (s_str*)GetStringForIndex(c->m_string_context, *destination, 1);
+		s_str *dest = (s_str*)GetStringForIndex(c->region_context, *destination, 1);
 		if (dest)
 			s_str_destroy(dest);
-		s_str *srcClass = (s_str*)GetStringForIndex(c->m_string_context, *source, 1);
+		s_str *srcClass = (s_str*)GetStringForIndex(c->region_context, *source, 1);
 		size_t len = (size_t)(*maxlen + NSEEL_CLOSEFACTOR);
 		if (len > s_str_capacity(srcClass))
 			return -1;
@@ -2244,8 +2752,8 @@ static float NSEEL_CGEN_CALL _eel_base64_decodeBinaryToTextFile(void *opaque, fl
 	if (opaque)
 	{
 		compileContext *c = (compileContext*)opaque;
-		const char *dest = (const char*)GetStringForIndex(c->m_string_context, *destination, 0);
-		const char *src = (const char *)GetStringForIndex(c->m_string_context, *source, 0);
+		const char *dest = (const char*)GetStringForIndex(c->region_context, *destination, 0);
+		const char *src = (const char *)GetStringForIndex(c->region_context, *source, 0);
 		if (dest && src)
 		{
 			unsigned char *buffer = 0;
@@ -2281,12 +2789,12 @@ static float NSEEL_CGEN_CALL _eel_base64_decodeBinaryToTextFile(void *opaque, fl
 	}
 	return 0.0f;
 }
-static float NSEEL_CGEN_CALL _eel_delete_all_strings(void *opaque, INT_PTR num_param, float **parms)
+static float NSEEL_CGEN_CALL _eel_resetSysMemRegion(void *opaque, INT_PTR num_param, float **parms)
 {
 	compileContext *c = (compileContext*)opaque;
-	eel_string_context_state *state = c->m_string_context;
-	Freeel_string_context_state(state);
-	Initeel_string_context_state(state);
+	eel_builtin_memRegion *state = c->region_context;
+	FreeRegion_context(state);
+	InitRegion_context(state);
 	return 0.0f;
 }
 int32_t get_float(char *val, float *F)
@@ -2334,7 +2842,7 @@ float* string2FloatArray(char *frArbitraryEqString, int32_t *elements)
 static float NSEEL_CGEN_CALL _eel_importFloatArrayFromString(void *opaque, float *fn_index, float *pointer)
 {
 	compileContext *c = (compileContext*)opaque;
-	const char *FLTBuf = (const char*)GetStringForIndex(c->m_string_context, *fn_index, 0);
+	const char *FLTBuf = (const char*)GetStringForIndex(c->region_context, *fn_index, 0);
 	uint32_t offs1 = (uint32_t)(*pointer + NSEEL_CLOSEFACTOR);
 	float *userspaceFLT = __NSEEL_RAMAlloc(c->ram_state, offs1);
 	int32_t elements;
@@ -2754,7 +3262,7 @@ static float NSEEL_CGEN_CALL _eel_iirBandSplitterInit(void *opaque, INT_PTR num_
 	if (num_param > 9)
 		return -1;
 	size_t requireMemSize;
-	void *ptr = 0;
+	void *ptr;
 	if (num_param == 3)
 	{
 		requireMemSize = sizeof(LinkwitzRileyCrossover);
@@ -2803,7 +3311,7 @@ static float NSEEL_CGEN_CALL _eel_iirBandSplitterInit(void *opaque, INT_PTR num_
 		init7BandsCrossover(bps, fs, *parms[2], *parms[3], *parms[4], *parms[5], *parms[6], *parms[7]);
 		ptr = bps;
 	}
-	else if (num_param == 9)
+	else
 	{
 		requireMemSize = sizeof(EightBandsCrossover);
 		EightBandsCrossover *bps = (EightBandsCrossover*)malloc(requireMemSize);
@@ -2913,38 +3421,18 @@ static float NSEEL_CGEN_CALL _eel_iirBandSplitterProcess(void *opaque, INT_PTR n
 	}
 	return 1;
 }
-#include "eel_matrix.h"
-#include "numericSys/FFTConvolver.h"
 static float NSEEL_CGEN_CALL _eel_initfftconv1d(void *opaque, INT_PTR num_param, float **parms)
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	if (c->numberOfConvolver > 1024 - 1)
-		return -1;
-	uint32_t ranN;
-	while (1)
-	{
-		ranN = (uint32_t)(nseel_int_rand(1.0f) * 1024.0);
-		uint32_t counter = 0;
-		for (uint32_t i = 0; i < c->numberOfConvolver; i++)
-		{
-			if (ranN == c->convolverMap[i])
-			{
-				counter++;
-				break;
-			}
-		}
-		if (!counter)
-			break;
-	}
-	void *ptr = 0;
-	uint32_t convType;
+	void *ptr;
+	char convType;
 	if (num_param == 3)
 		convType = 1;
 	else if (num_param == 4)
 		convType = 2;
 	else if (num_param == 6)
-		convType = 4;
+		convType = 3;
 	else
 		return -2;
 	uint32_t latency = (uint32_t)(*parms[0] + NSEEL_CLOSEFACTOR);
@@ -2958,7 +3446,7 @@ static float NSEEL_CGEN_CALL _eel_initfftconv1d(void *opaque, INT_PTR num_param,
 		FFTConvolver1x1LoadImpulseResponse(conv, latency, impulseresponse, irLen);
 		ptr = (void*)conv;
 	}
-	if (convType == 2)
+	else if (convType == 2)
 	{
 		uint32_t offs1 = (uint32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 		uint32_t offs2 = (uint32_t)(*parms[3] + NSEEL_CLOSEFACTOR);
@@ -2969,7 +3457,7 @@ static float NSEEL_CGEN_CALL _eel_initfftconv1d(void *opaque, INT_PTR num_param,
 		FFTConvolver2x2LoadImpulseResponse(conv, latency, leftImp, rightImp, irLen);
 		ptr = (void*)conv;
 	}
-	if (convType == 4)
+	else
 	{
 		uint32_t offs1 = (uint32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 		uint32_t offs2 = (uint32_t)(*parms[3] + NSEEL_CLOSEFACTOR);
@@ -2984,88 +3472,16 @@ static float NSEEL_CGEN_CALL _eel_initfftconv1d(void *opaque, INT_PTR num_param,
 		FFTConvolver2x4x2LoadImpulseResponse(conv, latency, LL, LR, RL, RR, irLen);
 		ptr = (void*)conv;
 	}
-	c->numberOfConvolver++;
-	int32_t idx = c->numberOfConvolver - 1;
-	if (idx)
-	{
-		c->convolverMap = (uint32_t*)realloc(c->convolverMap, c->numberOfConvolver * sizeof(uint32_t));
-		c->convolverType = (uint32_t*)realloc(c->convolverType, c->numberOfConvolver * sizeof(uint32_t));
-		c->convolverSink = (void**)realloc(c->convolverSink, c->numberOfConvolver * sizeof(void*));
-	}
-	else
-	{
-		c->convolverMap = (uint32_t*)malloc(c->numberOfConvolver * sizeof(uint32_t));
-		c->convolverType = (uint32_t*)malloc(c->numberOfConvolver * sizeof(uint32_t));
-		c->convolverSink = (void**)malloc(c->numberOfConvolver * sizeof(void*));
-	}
-	c->convolverMap[idx] = ranN;
-	c->convolverType[idx] = convType;
-	c->convolverSink[idx] = ptr;
-	return (float)ranN;
-}
-static float NSEEL_CGEN_CALL _eel_deletefftconv1d(void *opaque, float *v)
-{
-	compileContext *c = (compileContext*)opaque;
-	if (!c->convolverMap)
-		return -1;
-	int32_t idx = arySearch(c->convolverMap, c->numberOfConvolver, (int32_t)(*v + NSEEL_CLOSEFACTOR));
-	if (idx < 0)
-		return -2;
-	void *ptr = c->convolverSink[idx];
-	int32_t convType = c->convolverType[idx];
-	if (convType == 1)
-	{
-		FFTConvolver1x1 *conv = (FFTConvolver1x1*)ptr;
-		FFTConvolver1x1Free(conv);
-		free(conv);
-	}
-	if (convType == 2)
-	{
-		FFTConvolver2x2 *conv = (FFTConvolver2x2*)ptr;
-		FFTConvolver2x2Free(conv);
-		free(conv);
-	}
-	if (convType == 4)
-	{
-		FFTConvolver2x4x2 *conv = (FFTConvolver2x4x2*)ptr;
-		FFTConvolver2x4x2Free(conv);
-		free(conv);
-	}
-	for (uint32_t i = idx; i < c->numberOfConvolver - 1; i++)
-	{
-		c->convolverMap[i] = c->convolverMap[i + 1];
-		c->convolverType[i] = c->convolverType[i + 1];
-		c->convolverSink[i] = c->convolverSink[i + 1];
-	}
-	c->numberOfConvolver--;
-	if (c->numberOfConvolver)
-	{
-		c->convolverMap = (uint32_t*)realloc(c->convolverMap, c->numberOfConvolver * sizeof(uint32_t));
-		c->convolverType = (uint32_t*)realloc(c->convolverType, c->numberOfConvolver * sizeof(uint32_t));
-		c->convolverSink = (void**)realloc(c->convolverSink, c->numberOfConvolver * sizeof(void*));
-	}
-	else
-	{
-		free(c->convolverMap);
-		free(c->convolverType);
-		free(c->convolverSink);
-		c->convolverMap = 0;
-		c->convolverType = 0;
-		c->convolverSink = 0;
-	}
-	return 1;
+	int32_t id = AddData(c->region_context, ptr, convType);
+	return (float)id;
 }
 static float NSEEL_CGEN_CALL _eel_processfftconv1d(void *opaque, INT_PTR num_param, float **parms)
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	if (!c->convolverMap)
-		return -1;
-	int32_t idx = arySearch(c->convolverMap, c->numberOfConvolver, (uint32_t)(*parms[0] + NSEEL_CLOSEFACTOR));
-	if (idx < 0)
-		return 0;
-	void *ptr = c->convolverSink[idx];
-	int32_t convType = c->convolverType[idx];
+	int32_t idx = (uint32_t)(*parms[0] + NSEEL_CLOSEFACTOR);
+	void *ptr = c->region_context->memRegion[idx];
+	char convType = c->region_context->type[idx];
 	if (convType == 1)
 	{
 		FFTConvolver1x1 *conv = (FFTConvolver1x1*)ptr;
@@ -3082,7 +3498,7 @@ static float NSEEL_CGEN_CALL _eel_processfftconv1d(void *opaque, INT_PTR num_par
 		float *x2 = __NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
 		FFTConvolver2x2Process(conv, x1, x2, x1, x2, conv->_blockSize);
 	}
-	if (convType == 4)
+	if (convType == 3)
 	{
 		FFTConvolver2x4x2 *conv = (FFTConvolver2x4x2*)ptr;
 		uint32_t offs1 = (uint32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
@@ -3093,7 +3509,6 @@ static float NSEEL_CGEN_CALL _eel_processfftconv1d(void *opaque, INT_PTR num_par
 	}
 	return 1;
 }
-
 void *task_user_created(void *arg)
 {
 	abstractThreads *info = (abstractThreads *)arg;
@@ -3127,30 +3542,8 @@ void *task_user_created(void *arg)
 	pthread_exit(NULL);
 	return 0;
 }
-void eelThread_start(compileContext *st, size_t task)
+void thread_init(abstractThreads *info)
 {
-	abstractThreads *info = st->codePtrThreadSink[task];
-	// ensure worker is waiting
-	pthread_mutex_lock(&(info->work_mtx));
-	// set job information & state
-	info->state = EEL_WORKING;
-	// wake-up signal
-	pthread_cond_signal(&(info->work_cond));
-	pthread_mutex_unlock(&(info->work_mtx));
-}
-void eelThread_wait(compileContext *st, size_t task)
-{
-	abstractThreads *info = st->codePtrThreadSink[task];
-	while (1)
-	{
-		pthread_cond_wait(&(info->boss_cond), &(info->boss_mtx));
-		if (EEL_IDLE == info->state)
-			break;
-	}
-}
-void thread_init(compileContext *st, int task)
-{
-	abstractThreads *info = st->codePtrThreadSink[task];
 	info->state = EEL_SETUP;
 	pthread_cond_init(&(info->work_cond), NULL);
 	pthread_mutex_init(&(info->work_mtx), NULL);
@@ -3158,32 +3551,12 @@ void thread_init(compileContext *st, int task)
 	pthread_mutex_init(&(info->boss_mtx), NULL);
 	pthread_mutex_lock(&(info->boss_mtx));
 	pthread_create(&info->threadID, NULL, task_user_created, (void *)info);
-	eelThread_wait(st, task);
-}
-void thread_delete(compileContext *st, int task)
-{
-	abstractThreads *info = st->codePtrThreadSink[task];
-	// ensure the worker is waiting
-	if (info->state == EEL_WORKING)
-		eelThread_wait(st, task);
-	pthread_mutex_lock(&(info->work_mtx));
-	info->state = EEL_GET_OFF_FROM_WORK;
-	// wake-up signal
-	pthread_cond_signal(&(info->work_cond));
-	pthread_mutex_unlock(&(info->work_mtx));
-	// wait for thread to exit
-	pthread_join(info->threadID, NULL);
-	pthread_mutex_destroy(&(info->work_mtx));
-	pthread_cond_destroy(&(info->work_cond));
-	pthread_mutex_unlock(&(info->boss_mtx));
-	pthread_mutex_destroy(&(info->boss_mtx));
-	pthread_cond_destroy(&(info->boss_cond));
-	NSEEL_code_free(info->codePtr);
+	eelThread_wait(info);
 }
 static float NSEEL_CGEN_CALL _eel_initthread(void *opaque, float *stringID)
 {
 	compileContext *c = (compileContext*)opaque;
-	const char *codePtr = (const char*)GetStringForIndex(c->m_string_context, *stringID, 0);
+	const char *codePtr = (const char*)GetStringForIndex(c->region_context, *stringID, 0);
 	NSEEL_CODEHANDLE compiledCode = NSEEL_code_compile_ex(c, codePtr, 0, 1);
 	char *err;
 	char badStr[128];
@@ -3193,73 +3566,32 @@ static float NSEEL_CGEN_CALL _eel_initthread(void *opaque, float *stringID)
 		EEL_STRING_STDOUT_WRITE(badStr, strlen(badStr));
 		return -2;
 	}
-	float *blocks = c->ram_state;
-	if (c->numberOfThreads > 1024 - 1)
-		return -1;
-	uint32_t ranN;
-	while (1)
-	{
-		ranN = (uint32_t)(nseel_int_rand(1.0f) * 1024.0);
-		uint32_t counter = 0;
-		for (uint32_t i = 0; i < c->numberOfThreads; i++)
-		{
-			if (ranN == c->threadMap[i])
-			{
-				counter++;
-				break;
-			}
-		}
-		if (!counter)
-			break;
-	}
-	c->numberOfThreads++;
-	int32_t idx = c->numberOfThreads - 1;
-	c->codePtrThreadSink[idx] = (abstractThreads*)malloc(sizeof(abstractThreads));
-	thread_init(c, idx);
-	c->codePtrThreadSink[idx]->codePtr = compiledCode;
-	c->threadMap[idx] = ranN;
-	return (float)ranN;
+	abstractThreads *pth = (abstractThreads*)malloc(sizeof(abstractThreads));
+	pth->codePtr = compiledCode;
+	thread_init(pth);
+	int32_t id = AddData(c->region_context, (void *)pth, 4);
+	return (float)id;
 }
-static float NSEEL_CGEN_CALL _eel_deletethread(void *opaque, float *v)
+static float NSEEL_CGEN_CALL _eel_deleteSysVariable(void *opaque, float *v)
 {
 	compileContext *c = (compileContext*)opaque;
-	if (!c->threadMap)
-		return -1;
-	int32_t idx = arySearch(c->threadMap, c->numberOfThreads, (int32_t)(*v + NSEEL_CLOSEFACTOR));
-	if (idx < 0)
-		return -2;
-	thread_delete(c, idx);
-	free(c->codePtrThreadSink[idx]);
-	for (uint32_t i = idx; i < c->numberOfThreads - 1; i++)
-	{
-		c->threadMap[i] = c->threadMap[i + 1];
-		c->codePtrThreadSink[i] = c->codePtrThreadSink[i + 1];
-	}
-	c->numberOfThreads--;
+	DeleteSlot(c->region_context, (int32_t)(*v + NSEEL_CLOSEFACTOR));
 	return 1;
 }
 static float NSEEL_CGEN_CALL _eel_createThread(void *opaque, float *v)
 {
 	compileContext *c = (compileContext*)opaque;
-	float *blocks = c->ram_state;
-	if (!c->threadMap)
-		return -1;
-	int32_t idx = arySearch(c->threadMap, c->numberOfThreads, (uint32_t)(*v + NSEEL_CLOSEFACTOR));
-	if (idx < 0)
-		return 0;
-	eelThread_start(c, idx);
+	int32_t idx = (int32_t)(*v + NSEEL_CLOSEFACTOR);
+	abstractThreads *ptr = (abstractThreads *)c->region_context->memRegion[idx];
+	eelThread_start(ptr);
 	return 1;
 }
 static float NSEEL_CGEN_CALL _eel_joinThread(void *opaque, float *v)
 {
 	compileContext *c = (compileContext*)opaque;
-	float *blocks = c->ram_state;
-	if (!c->threadMap)
-		return -1;
-	int32_t idx = arySearch(c->threadMap, c->numberOfThreads, (uint32_t)(*v + NSEEL_CLOSEFACTOR));
-	if (idx < 0)
-		return 0;
-	eelThread_wait(c, idx);
+	int32_t idx = (int32_t)(*v + NSEEL_CLOSEFACTOR);
+	abstractThreads *ptr = (abstractThreads *)c->region_context->memRegion[idx];
+	eelThread_wait(ptr);
 	return 1;
 }
 static float NSEEL_CGEN_CALL _eel_lockThread(void *opaque, float *v)
@@ -3274,7 +3606,208 @@ static float NSEEL_CGEN_CALL _eel_unlockThread(void *opaque, float *v)
 	pthread_mutex_unlock(&c->globalLocker);
 	return 1;
 }
-
+// HPFloat
+#define HPFREPEATBLKEND \
+void *ptr = malloc(sizeof(xpr)); \
+memcpy(ptr, (void *)&br, sizeof(xpr)); \
+int32_t id = AddData(c->region_context, ptr, 5); \
+return id;
+static float NSEEL_CGEN_CALL _eel_createHPFloatFromString(void *opaque, float *v)
+{
+	compileContext *c = (compileContext *)opaque;
+	const char *decimal = (const char *)GetStringForIndex(c->region_context, *v, 0);
+	xpr br = atox(decimal);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_createHPFloatFromFloat32(void *opaque, float *flt)
+{
+	compileContext *c = (compileContext *)opaque;
+	xpr br = flttox(*flt);
+	void *ptr = malloc(sizeof(xpr));
+	memcpy(ptr, (void *)&br, sizeof(xpr));
+	int32_t id = AddData(c->region_context, ptr, 5);
+	return id;
+}
+static float NSEEL_CGEN_CALL _eel_createHPFloatToFloat32(void *opaque, float *v)
+{
+	compileContext *c = (compileContext *)opaque;
+	int32_t idx = (int32_t)(*v + NSEEL_CLOSEFACTOR);
+	xpr *br = (xpr *)c->region_context->memRegion[idx];
+	return xtoflt(*br);
+}
+static float NSEEL_CGEN_CALL _eel_createHPFloatToString(void *opaque, float *v)
+{
+	compileContext *c = (compileContext *)opaque;
+	int32_t idx = (int32_t)(*v + NSEEL_CLOSEFACTOR);
+	xpr *br = (xpr *)c->region_context->memRegion[idx];
+	char *str = xpr_asprint(*br, 1, 0, (XDIM * 48) / 10 - 2);
+	int32_t id = AddData(c->region_context, (void*)str, 0);
+	return id;
+}
+#define HPFREPEATBLKDYADIC \
+compileContext *c = (compileContext *)opaque; \
+xpr *x1 = (xpr *)c->region_context->memRegion[(int32_t)(*parms[0] + NSEEL_CLOSEFACTOR)]; \
+xpr *x2 = (xpr *)c->region_context->memRegion[(int32_t)(*parms[1] + NSEEL_CLOSEFACTOR)];
+#define HPFREPEATBLK1O \
+compileContext *c = (compileContext *)opaque; \
+xpr *x = (xpr *)c->region_context->memRegion[(int32_t)(*parms[0] + NSEEL_CLOSEFACTOR)];
+static float NSEEL_CGEN_CALL _eel_HPFAdd(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr br = xadd(*x1, *x2, 0);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_HPFSub(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr br = xadd(*x1, *x2, 1);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_HPFMul(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr br = xmul(*x1, *x2);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_HPFDiv(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr br = xdiv(*x1, *x2);
+	HPFREPEATBLKEND
+}
+// Math functions
+static float NSEEL_CGEN_CALL _eel_HPFfrexp(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLK1O
+	float *blocks = c->ram_state;
+	int p;
+	xpr br = xfrexp(*x, &p);
+	uint32_t offs2 = (uint32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
+	float *out = (float *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	void *ptr = malloc(sizeof(xpr));
+	memcpy(ptr, (void *)&br, sizeof(xpr));
+	out[0] = AddData(c->region_context, ptr, 5);
+	ptr = malloc(sizeof(xpr));
+	br = dbltox((double)p);
+	memcpy(ptr, (void *)&br, sizeof(xpr));
+	out[1] = AddData(c->region_context, ptr, 5);
+	return 0;
+}
+static float NSEEL_CGEN_CALL _eel_HPFqfmod(void *opaque, INT_PTR num_param, float **parms)
+{
+	compileContext *c = (compileContext *)opaque;
+	xpr *s = (xpr *)c->region_context->memRegion[(int32_t)(*parms[0] + NSEEL_CLOSEFACTOR)];
+	xpr *t = (xpr *)c->region_context->memRegion[(int32_t)(*parms[1] + NSEEL_CLOSEFACTOR)];
+	xpr *q = (xpr *)c->region_context->memRegion[(int32_t)(*parms[2] + NSEEL_CLOSEFACTOR)];
+	xpr br = xfmod(*s, *t, q);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_HPFfmod(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr q;
+	xpr br = xfmod(*x1, *x2, &q);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_HPFsfmod(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLK1O
+	float *blocks = c->ram_state;
+	int p;
+	xpr br = xsfmod(*x, &p);
+	uint32_t offs2 = (uint32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
+	float *out = (float *)__NSEEL_RAMAlloc(blocks, (uint64_t)offs2);
+	void *ptr = malloc(sizeof(xpr));
+	memcpy(ptr, (void *)&br, sizeof(xpr));
+	out[0] = AddData(c->region_context, ptr, 5);
+	ptr = malloc(sizeof(xpr));
+	br = dbltox((double)p);
+	memcpy(ptr, (void *)&br, sizeof(xpr));
+	out[1] = AddData(c->region_context, ptr, 5);
+	return 0;
+}
+static float NSEEL_CGEN_CALL _eel_HPFMulPowOf2(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLK1O
+	xpr br = xpr2(*x, (int32_t)(*parms[1] + NSEEL_CLOSEFACTOR));
+	HPFREPEATBLKEND
+}
+#define HPFLogicGen1O(fname, expr) \
+static float NSEEL_CGEN_CALL fname(void *opaque, INT_PTR num_param, float **parms) \
+{ \
+	HPFREPEATBLK1O \
+	int lg = expr; \
+	return lg; \
+}
+#define HPFLogicGenDYADIC(fname, expr) \
+static float NSEEL_CGEN_CALL fname(void *opaque, INT_PTR num_param, float **parms) \
+{ \
+	HPFREPEATBLKDYADIC \
+	int lg = expr; \
+	return lg; \
+}
+#define HPFGen(fname, expr) \
+static float NSEEL_CGEN_CALL fname(void *opaque, INT_PTR num_param, float **parms) \
+{ \
+	HPFREPEATBLK1O \
+	xpr br = expr(*x); \
+	HPFREPEATBLKEND \
+}
+HPFGen(_eel_HPFfrac, xfrac)
+HPFGen(_eel_HPFabs, xabs)
+HPFGen(_eel_HPFtrunc, xtrunc)
+HPFGen(_eel_HPFround, xround)
+HPFGen(_eel_HPFceil, xceil)
+HPFGen(_eel_HPFfloor, xfloor)
+HPFGen(_eel_HPFfix, xfix)
+HPFGen(_eel_HPFtan, xtan)
+HPFGen(_eel_HPFsin, xsin)
+HPFGen(_eel_HPFcos, xcos)
+HPFGen(_eel_HPFatan, xatan)
+HPFGen(_eel_HPFasin, xasin)
+HPFGen(_eel_HPFacos, xacos)
+HPFGen(_eel_HPFNegation, xneg)
+static float NSEEL_CGEN_CALL _eel_HPFatan2(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr br = xatan2(*x1, *x2);
+	HPFREPEATBLKEND
+}
+HPFGen(_eel_HPFsqrt, xsqrt)
+HPFGen(_eel_HPFexp, xexp)
+HPFGen(_eel_HPFexp2, xexp2)
+HPFGen(_eel_HPFexp10, xexp10)
+HPFGen(_eel_HPFlog, xlog)
+HPFGen(_eel_HPFlog2, xlog2)
+HPFGen(_eel_HPFlog10, xlog10)
+HPFGen(_eel_HPFtanh, xtanh)
+HPFGen(_eel_HPFsinh, xsinh)
+HPFGen(_eel_HPFcosh, xcosh)
+HPFGen(_eel_HPFatanh, xatanh)
+HPFGen(_eel_HPFasinh, xasinh)
+HPFGen(_eel_HPFacosh, xacosh)
+HPFGen(_eel_HPFclone, )
+static float NSEEL_CGEN_CALL _eel_HPFpow(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLKDYADIC
+	xpr br = xpow(*x1, *x2);
+	HPFREPEATBLKEND
+}
+static float NSEEL_CGEN_CALL _eel_HPFIntPow(void *opaque, INT_PTR num_param, float **parms)
+{
+	HPFREPEATBLK1O
+	xpr br = xpwr(*x, (int32_t)roundf(*parms[1]));
+	HPFREPEATBLKEND
+}
+HPFLogicGen1O(_eel_HPFiszero, xis0(x))
+HPFLogicGen1O(_eel_HPFisneg, x_neg(x))
+HPFLogicGen1O(_eel_HPFbinaryexp, x_exp(x))
+HPFLogicGenDYADIC(_eel_HPFeq, (xprcmp(x1, x2) == 0))
+HPFLogicGenDYADIC(_eel_HPFneq, (xprcmp(x1, x2) != 0))
+HPFLogicGenDYADIC(_eel_HPFle, (xprcmp(x1, x2) <= 0))
+HPFLogicGenDYADIC(_eel_HPFge, (xprcmp(x1, x2) >= 0))
+HPFLogicGenDYADIC(_eel_HPFgt, (xprcmp(x1, x2) > 0))
+HPFLogicGenDYADIC(_eel_HPFlt, (xprcmp(x1, x2) < 0))
 static void channel_split(float *buffer, uint64_t num_frames, float **chan_buffers, uint32_t num_channels)
 {
 	uint64_t i, samples = num_frames * num_channels;
@@ -3286,83 +3819,6 @@ static void channel_join(float **chan_buffers, uint32_t num_channels, float *buf
 	uint64_t i, samples = num_frames * num_channels;
 	for (i = 0; i < samples; i++)
 		buffer[i] = (float)(chan_buffers[i % num_channels][i / num_channels]);
-}
-static const double compressedCoeffMQ[701] = { 0.919063234986138511, 0.913619994199411201, 0.897406560667438402, 0.870768836078722797, 0.834273523109754001, 0.788693711602254766, 0.734989263333015286, 0.674282539592362951, 0.607830143521649657, 0.536991457245508341, 0.463194839157173466, 0.387902406850539450, 0.312574364478514499, 0.238633838900749129, 0.167433166845669668, 0.100222526262645231, 0.038121730693097225, -0.017904091793426027, -0.067064330735278010, -0.108757765594775291, -0.142582153044975485, -0.168338357500518510, -0.186029009837402531, -0.195851834439330574, -0.198187933840591440, -0.193585458951914369, -0.182739217157973949, -0.166466876941489483, -0.145682513177707279, -0.121368299577954988, -0.094545192393702127, -0.066243461643369750, -0.037473912797399318, -0.009200603832691301, 0.017684198632122932, 0.042382162574711987, 0.064207571946511041, 0.082602100079150684, 0.097145355203635028, 0.107561011406507381, 0.113718474453852247, 0.115630166683615837, 0.113444644504459249, 0.107435882084395071, 0.097989162055837783, 0.085584105452548076, 0.070775446120293309, 0.054172207614333223, 0.036415971885660689, 0.018158938330246815, 0.000042459196338912, -0.017323296238410713, -0.033377949403731559, -0.047627263300716267, -0.059656793081079629, -0.069142490141500798, -0.075858019256578396, -0.079678658979652428, -0.080581767609623323, -0.078643906863599317, -0.074034819562284179, -0.067008552930955145, -0.057892102695980191, -0.047072022601671190, -0.034979497375161483, -0.022074413174279148, -0.008828977400685476, 0.004288560713652965, 0.016829555699174666, 0.028379479813981756, 0.038570858162652835, 0.047094241683417769, 0.053706909605020871, 0.058239076113395197, 0.060597464446319166, 0.060766202425508065, 0.058805083502616720, 0.054845323789501445, 0.049083025498695095, 0.041770628243703020, 0.033206689594802247, 0.023724383421121997, 0.013679137601712221, 0.003435850879130631, -0.006643868309165797, -0.016214010012738603, -0.024955612937682017, -0.032586990530198853, -0.038872417226545809, -0.043629018879643239, -0.046731678346964158, -0.048115839004410917, -0.047778163016171563, -0.045775074997070689, -0.042219292770236193, -0.037274512912134725, -0.031148477572630149, -0.024084698830208532, -0.016353156105483747, -0.008240309809337577, -0.000038789761018515, 0.007962880277736915, 0.015490170167632772, 0.022291712611484882, 0.028147455724642705, 0.032875542265754551, 0.036337708303315903, 0.038443049556812471, 0.039150063091460026, 0.038466933347880143, 0.036450092517807633, 0.033201143952433128, 0.028862291652591764, 0.023610467168487866, 0.017650385903971395, 0.011206796641134264, 0.004516210167813600, -0.002181595351151269, -0.008651993358287469, -0.014673562407359826, -0.020045503214184583, -0.024594176093158650, -0.028178551235573571, -0.030694406321622035, -0.032077152831841031, -0.032303222419993387, -0.031389996039150381, -0.029394309376722470, -0.026409616804964359, -0.022561940854659814, -0.018004773700230153, -0.012913130046223239, -0.007476976122050557, -0.001894276500050309, 0.003636091270827173, 0.008921304789011335, 0.013781207467236415, 0.018054338893886482, 0.021603186795815136, 0.024318493648450956, 0.026122487293166251, 0.026970945047679402, 0.026854043263213976, 0.025795987570079431, 0.023853461640206807, 0.021112972713804853, 0.017687209024348168, 0.013710556397414673, 0.009333947668859192, 0.004719238361448204, 0.000033314715823999, -0.004557854609777880, -0.008895014112733140, -0.012831064739959125, -0.016235971633599879, -0.019000975419769615, -0.021041973670496809, -0.022301970824562707, -0.022752529440111541, -0.022394191906072568, -0.021255878361951062, -0.019393302279828196, -0.016886478718542881, -0.013836430536684995, -0.010361223853106050, -0.006591484944463394, -0.002665565936317155, 0.001275464342459697, 0.005092825309417521, 0.008654850008311749, 0.011841465274590917, 0.014548176385701671, 0.016689426206986688, 0.018201223316688792, 0.019042961289876651, 0.019198381208357294, 0.018675660452129358, 0.017506641810096972, 0.015745246837337051, 0.013465145155917528, 0.010756776112709417, 0.007723840062309154, 0.004479392878420811, 0.001141688626311485, -0.002170078649346380, -0.005339982462341837, -0.008259373919338373, -0.010830557217282604, -0.012970007990380254, -0.014611030342508765, -0.015705770153788771, -0.016226526478563909, -0.016166328657139784, -0.015538773207899238, -0.014377140707818779, -0.012732837794565421, -0.010673232279050818, -0.008278969379415602, -0.005640873626063710, -0.002856553527664500, -0.000026834265658038, 0.002747852704083721, 0.005370995258360709, 0.007753319014958258, 0.009815785813909824, 0.011492173003678219, 0.012731150958433296, 0.013497795530424229, 0.013774493273929109, 0.013561219484126362, 0.012875191572278549, 0.011749922250546383, 0.010233717662138146, 0.008387684262046795, 0.006283324310867826, 0.003999812773708582, 0.001621057822818793, -0.000767347236997687, -0.003081171091507831, -0.005240483245491547, -0.007172383140908554, -0.008813427537033921, -0.010111676574189758, -0.011028293954650051, -0.011538653669060464, -0.011632924035784708, -0.011316118830412747, -0.010607624279109693, -0.009540229002217340, -0.008158700990423423, -0.006517970800651516, -0.004680992876389242, -0.002716366825287035, -0.000695807329823454, 0.001308445056270027, 0.003226179724201707, 0.004991648959431359, 0.006545794666321473, 0.007838194454033614, 0.008828664063258869, 0.009488466505815606, 0.009801093167340614, 0.009762597931815446, 0.009381481548192093, 0.008678139395534967, 0.007683900954968532, 0.006439703144240938, 0.004994451750326167, 0.003403135115410580, 0.001724761684323746, 0.000020197792912962, -0.001650015947868542, -0.003227792151864713, -0.004659494079420105, -0.005897735119564774, -0.006902920847777659, -0.007644484483944344, -0.008101778413755888, -0.008264597354555087, -0.008133322264400958, -0.007718687720230902, -0.007041188742854554, -0.006130155461650219, -0.005022535167821778, -0.003761430832691131, -0.002394452762763960, -0.000971945496911797, 0.000454844825025831, 0.001835596641714852, 0.003122668316617104, 0.004272722114380925, 0.005248162177843576, 0.006018339594106877, 0.006560486855847911, 0.006860354383749922, 0.006912532886871314, 0.006720456790559610, 0.006296095343184246, 0.005659348921651181, 0.004837178114662079, 0.003862502033291890, 0.002772909691220670, 0.001609233980906675, 0.000414041581645497, -0.000769906024675906, -0.001901165407831948, -0.002941044990442539, -0.003854910802244932, -0.004613320774623974, -0.005192951162290093, -0.005577286818932973, -0.005757056020769449, -0.005730399990410974, -0.005502776877353867, -0.005086609356845171, -0.004500693886508907, -0.003769397706347888, -0.002921676615038254, -0.001989952181071211, -0.001008891180284735, -0.000014132577398601, 0.000958991766382216, 0.001876697269289887, 0.002707904681562794, 0.003425276863778077, 0.004006100299408528, 0.004432983601002821, 0.004694352366032693, 0.004784727410211850, 0.004704781367912914, 0.004461176612085595, 0.004066195127045020, 0.003537178100163921, 0.002895799341758980, 0.002167201988627001, 0.001379032128141500, 0.000560405874095270, -0.000259152041390146, -0.001050759947470964, -0.001787184184342184, -0.002443762818329620, -0.002999217281793143, -0.003436325772772713, -0.003742437746853627, -0.003909814939345641, -0.003935790838753386, -0.003822747153675574, -0.003577912336230492, -0.003212993416401785, -0.002743658050835511, -0.002188888608264336, -0.001570234143874397, -0.000910989133812205, -0.000235329764723561, 0.000432560641279413, 0.001069345839998360, 0.001653340745377959, 0.002165238082962834, 0.002588733711954676, 0.002911030869493576, 0.003123208352342977, 0.003220442832479460, 0.003202080909987641, 0.003071561941475896, 0.002836197950977609, 0.002506821849485185, 0.002097319592184942, 0.001624065644771860, 0.001105284094542681, 0.000560359841433201, 0.000009125484808694, -0.000528850236297424, -0.001034947274672293, -0.001492128764321782, -0.001885503916298735, -0.002202801129643487, -0.002434736758218434, -0.002575269035034838, -0.002621730990172647, -0.002574840645573092, -0.002438591168737718, -0.002220027862259672, -0.001928922712789991, -0.001577360593112676, -0.001179253996234489, -0.000749805296090004, -0.000304936916893765, 0.000139289578942291, 0.000567244609490058, 0.000964271897894877, 0.001317181565737385, 0.001614678737960774, 0.001847714105275549, 0.002009746006742852, 0.002096907004167219, 0.002108071492117578, 0.002044824491385029, 0.001911335280223238, 0.001714142804308648, 0.001461862761483392, 0.001164828784166054, 0.000834682161765550, 0.000483925998593740, 0.000125460552453497, -0.000227883269383389, -0.000563795658925073, -0.000870909262856999, -0.001139175997920627, -0.001360187135536317, -0.001527426803455576, -0.001636451679881492, -0.001684992470943874, -0.001672975660262524, -0.001602466894019970, -0.001477540114542411, -0.001304079085075351, -0.001089520173828018, -0.000842547115162114, -0.000572749884052837, -0.000290260767615715, -0.000005381173403155, 0.000271787324682131, 0.000531694720882059, 0.000765665077860444, 0.000966179147256847, 0.001127108176071712, 0.001243891947014572, 0.001313656276814221, 0.001335267482640161, 0.001309323638539731, 0.001238084697878249, 0.001125345675261167, 0.000976258990458714, 0.000797113715033597, 0.000595080778704776, 0.000377934148912837, 0.000153758569481225, -0.000069345376995143, -0.000283548328671139, -0.000481561352316614, -0.000656878246049437, -0.000803983100343503, -0.000918516742461215, -0.000997397336828164, -0.001038892182663637, -0.001042639573678904, -0.001009621396079384, -0.000942088876021349, -0.000843445486235168, -0.000718092430499951, -0.000571243299133416, -0.000408715393446694, -0.000236705827693455, -0.000061560820167541, 0.000110453421068778, 0.000273370118506192, 0.000421724138601977, 0.000550730322629083, 0.000656432310144007, 0.000735817450677950, 0.000786894740519778, 0.000808734131933592, 0.000801466989262860, 0.000766248858509478, 0.000705187025332569, 0.000621236516650982, 0.000518069214751335, 0.000399921568730665, 0.000271426983019702, 0.000137439322056229, 0.000002854088234340, -0.000127566289796932, -0.000249356967950712, -0.000358499459727905, -0.000451549869015331, -0.000525742663600061, -0.000579067066332711, -0.000610314210246149, -0.000619094306052033, -0.000605824164738963, -0.000571686465475047, -0.000518563123569660, -0.000448945962885840, -0.000365828604967228, -0.000272584032349123, -0.000172832651673869, -0.000070305865763902, 0.000031289837955523, 0.000128403456337462, 0.000217760218406138, 0.000296468531144650, 0.000362109765670523, 0.000412808249833617, 0.000447279627497663, 0.000464856578836417, 0.000465491738613502, 0.000449738470059130, 0.000418710921836804, 0.000374025488711351, 0.000317726390511799, 0.000252198560764628, 0.000180071382714710, 0.000104117018254314, 0.000027147141711448, -0.000048088182130861, -0.000118995940709898, -0.000183226726188442, -0.000238749615318076, -0.000283913107803554, -0.000317490431754438, -0.000338708143110164, -0.000347257581417331, -0.000343289373546324, -0.000327391777412823, -0.000300554208881314, -0.000264117778630104, -0.000219715066774411, -0.000169201669906033, -0.000114582260151285, -0.000057933995063949, -0.000001330110803372, 0.000053233576939992, 0.000103906741924272, 0.000149044949497856, 0.000187260510974094, 0.000217462319983746, 0.000238883649294571, 0.000251097355835207, 0.000254018413730855, 0.000247894152903089, 0.000233283008194432, 0.000211022966716673, 0.000182191226994878, 0.000148056842795767, 0.000110028310364557, 0.000069598166140896, 0.000028286691831679, -0.000012413223177511, -0.000051088131137235, -0.000086451240238396, -0.000117383287411682, -0.000142965848616867, -0.000162506184310969, -0.000175553056891817, -0.000181903303379713, -0.000181599287597338, -0.000174917679492114, -0.000162350303974188, -0.000144578058136870, -0.000122439106161612, -0.000096892719738482, -0.000068980234721197, -0.000039784640417051, -0.000010390306964679, 0.000018155708707897, 0.000044879452343343, 0.000068911789142910, 0.000089515073669816, 0.000106104020030281, 0.000118260259226232, 0.000125740319217347, 0.000128477011389261, 0.000126574445796332, 0.000120297118433995, 0.000110053709582710, 0.000096376396848920, 0.000079896615190895, 0.000061318285745045, 0.000041389584008291, 0.000020874325790195, 0.000000524017729422, -0.000018948449136533, -0.000036892585232981, -0.000052740818819573, -0.000066025144314650, -0.000076389469747209, -0.000083597404911355, -0.000087535408131387, -0.000088211381288728, -0.000085748963835814, -0.000080377921496540, -0.000072421149619506, -0.000062278911057702, -0.000050411001395778, -0.000037317578835504, -0.000023519411693731, -0.000009538283954733, 0.000004121739654397, 0.000016991550435446, 0.000028652179052461, 0.000038747470023706, 0.000046993903986995, 0.000053187343852112, 0.000057206603209622, 0.000059013855762422, 0.000058652018744224, 0.000056239347370971, 0.000051961567969763, 0.000046061951828715, 0.000038829788015541, 0.000030587750191730, 0.000021678669346899, 0.000012452221695327, 0.000003252019725938, -0.000005596443768274, -0.000013796601731427, -0.000021090036946349, -0.000027263866219030, -0.000032156106624670, -0.000035658928433894, -0.000037719781474555, -0.000038340460301533, -0.000037574245901964, -0.000035521325378456, -0.000032322744186229, -0.000028153186597604, -0.000023212908194301, -0.000017719158939021, -0.000011897436866734, -0.000005972901266780, -0.000000162251446552, 0.000005333655793588, 0.000010336218246169, 0.000014694346087313, 0.000018288433744639, 0.000021032968627464, 0.000022877753957232, 0.000023807775391314, 0.000023841789731823, 0.000023029757133319, 0.000021449274538926, 0.000019201196577477, 0.000016404650185715, 0.000013191660473528, 0.000009701607868611, 0.000006075730729441, 0.000002451874068818, -0.000001040335292299, -0.000004283732788372, -0.000007177155365100, -0.000009638185206925, -0.000011605042076524, -0.000013037603419542, -0.000013917565218600, -0.000014247788012456, -0.000014050900469913, -0.000013367256554309, -0.000012252360976939, -0.000010773890887184, -0.000009008449384796, -0.000007038188493661, -0.000004947435946560, -0.000002819451929447, -0.000000733429418017, 0.000001238164361723, 0.000003031826677860, 0.000004594780305705, 0.000005886220575305, 0.000006878033995645, 0.000007554995005623, 0.000007914466875845, 0.000007965650064675, 0.000007728435880102, 0.000007231934716903, 0.000006512756173231, 0.000005613122895949, 0.000004578901096601, 0.000003457628489583, 0.000002296615219305, 0.000001141185552533, 0.000000033118183302, -0.000000990668545558, -0.000001899152803076, -0.000002667946210802, -0.000003279724008567, -0.000003724353373815, -0.000003998736284580, -0.000004106393367485, -0.000004056823505075, -0.000003864680371659, -0.000003548811395079, -0.000003131206866384, -0.000002635907089885, -0.000002087913711897, -0.000001512147886406, -0.000000932492985725, -0.000000370953442845, 0.000000153045653294, 0.000000623201057861, 0.000001026706448750, 0.000001354458044511, 0.000001601095747237, 0.000001764891111188, 0.000001847498832724, 0.000001853592772907, 0.000001790410657756, 0.000001667233505382, 0.000001494826511430, 0.000001284867642241, 0.000001049388641653, 0.000000800250692844, 0.000000548673760673, 0.000000304834862491, 0.000000077546377014, -0.000000125978796206, -0.000000300272674786, -0.000000441669721214, -0.000000548281621807, -0.000000619897641839, -0.000000657821438861, -0.000000664657100282, -0.000000644058349094, -0.000000600455333568, -0.000000538773213853, -0.000000464155939282, -0.000000381707256690, -0.000000296259201847, -0.000000212176215381, -0.000000133200709942, -0.000000062343516559, 0.0 };
-void decompressResamplerMQ(const double y[701], float *yi)
-{
-	double breaks[701];
-	double coefs[2800];
-	int k;
-	double s[701];
-	double dx[700];
-	double dvdf[700];
-	double r, dzzdx, dzdxdx;
-	for (k = 0; k < 700; k++)
-	{
-		r = 0.0014285714285714286 * ((double)k + 1.0) - 0.0014285714285714286 * (double)k;
-		dx[k] = r;
-		dvdf[k] = (y[k + 1] - y[k]) / r;
-	}
-	s[0] = ((dx[0] + 0.0057142857142857143) * dx[1] * dvdf[0] + dx[0] * dx[0] * dvdf[1]) / 0.0028571428571428571;
-	s[700] = ((dx[699] + 0.0057142857142857828) * dx[698] * dvdf[699] + dx[699] * dx[699] * dvdf[698]) / 0.0028571428571428914;
-	breaks[0] = dx[1];
-	breaks[700] = dx[698];
-	for (k = 0; k < 699; k++)
-	{
-		r = dx[k + 1];
-		s[k + 1] = 3.0 * (r * dvdf[k] + dx[k] * dvdf[k + 1]);
-		breaks[k + 1] = 2.0 * (r + dx[k]);
-	}
-	r = dx[1] / breaks[0];
-	breaks[1] -= r * 0.0028571428571428571;
-	s[1] -= r * s[0];
-	for (k = 0; k < 698; k++)
-	{
-		r = dx[k + 2] / breaks[k + 1];
-		breaks[k + 2] -= r * dx[k];
-		s[k + 2] -= r * s[k + 1];
-	}
-	r = 0.0028571428571428914 / breaks[699];
-	breaks[700] -= r * dx[698];
-	s[700] -= r * s[699];
-	s[700] /= breaks[700];
-	for (k = 698; k >= 0; k--)
-		s[k + 1] = (s[k + 1] - dx[k] * s[k + 2]) / breaks[k + 1];
-	s[0] = (s[0] - 0.0028571428571428571 * s[1]) / breaks[0];
-	for (k = 0; k < 701; k++)
-		breaks[k] = 0.0014285714285714286 * (double)k;
-	for (k = 0; k < 700; k++)
-	{
-		r = 1.0 / dx[k];
-		dzzdx = (dvdf[k] - s[k]) * r;
-		dzdxdx = (s[k + 1] - dvdf[k]) * r;
-		coefs[k] = (dzdxdx - dzzdx) * r;
-		coefs[k + 700] = 2.0 * dzzdx - dzdxdx;
-		coefs[k + 1400] = s[k];
-		coefs[k + 2100] = y[k];
-	}
-	double d = 1.0 / 22437.0;
-	int low_i, low_ip1, high_i, mid_i;
-	for (k = 0; k < 22438; k++)
-	{
-		low_i = 0;
-		low_ip1 = 2;
-		high_i = 701;
-		r = k * d;
-		while (high_i > low_ip1)
-		{
-			mid_i = ((low_i + high_i) + 1) >> 1;
-			if (r >= breaks[mid_i - 1])
-			{
-				low_i = mid_i - 1;
-				low_ip1 = mid_i + 1;
-			}
-			else
-				high_i = mid_i;
-		}
-		double xloc = r - breaks[low_i];
-		yi[k] = (float)(xloc * (xloc * (xloc * coefs[low_i] + coefs[low_i + 700]) + coefs[low_i + 1400]) + coefs[low_i + 2100]);
-	}
 }
 #include "numericSys/libsamplerate/samplerate.h"
 void JamesDSPOfflineResampling(float const *in, float *out, size_t lenIn, size_t lenOut, int channels, double src_ratio)
@@ -3385,7 +3841,6 @@ void JamesDSPOfflineResampling(float const *in, float *out, size_t lenIn, size_t
 		printf("\n%s\n\n", src_strerror(error));
 	}
 }
-float *decompressedCoefficients = 0;
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
 #define DR_WAV_IMPLEMENTATION
@@ -3394,7 +3849,7 @@ static float NSEEL_CGEN_CALL _eel_flacDecodeFile(void *opaque, INT_PTR num_param
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	const char *filename = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
+	const char *filename = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
 	uint32_t channels, fs;
 	uint64_t frameCount;
 	float *signal = drflac_open_file_and_read_pcm_frames_f32(filename, &channels, &fs, &frameCount, 0);
@@ -3454,7 +3909,7 @@ static float NSEEL_CGEN_CALL _eel_flacDecodeMemory(void *opaque, INT_PTR num_par
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	const char *base64String = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
+	const char *base64String = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
 	size_t actualSize;
 	unsigned char *memoryBlk = base64_decode((const unsigned char*)base64String, strlen(base64String), &actualSize);
 	uint32_t channels, fs;
@@ -3517,7 +3972,7 @@ static float NSEEL_CGEN_CALL _eel_wavDecodeFile(void *opaque, INT_PTR num_param,
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	const char *filename = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
+	const char *filename = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
 	uint32_t channels, fs;
 	uint64_t frameCount;
 	float *signal = drwav_open_file_and_read_pcm_frames_f32(filename, &channels, &fs, &frameCount, 0);
@@ -3577,7 +4032,7 @@ static float NSEEL_CGEN_CALL _eel_wavDecodeMemory(void *opaque, INT_PTR num_para
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	const char *base64String = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
+	const char *base64String = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
 	size_t actualSize;
 	unsigned char *memoryBlk = base64_decode((const unsigned char*)base64String, strlen(base64String), &actualSize);
 	uint32_t channels, fs;
@@ -3846,7 +4301,7 @@ static float NSEEL_CGEN_CALL _eel_writeWavFile(void *opaque, INT_PTR num_param, 
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	const char *filename = (const char*)GetStringForIndex(c->m_string_context, *parms[0], 0);
+	const char *filename = (const char*)GetStringForIndex(c->region_context, *parms[0], 0);
 	uint32_t channels = (uint32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
 	uint32_t fs = (uint32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 	uint64_t frameCount = (uint64_t)(*parms[3] + NSEEL_CLOSEFACTOR);
@@ -3875,7 +4330,7 @@ static float NSEEL_CGEN_CALL _eel_writeWavMemory(void *opaque, INT_PTR num_param
 {
 	compileContext *c = (compileContext*)opaque;
 	float *blocks = c->ram_state;
-	s_str *dest = (s_str*)GetStringForIndex(c->m_string_context, *parms[0], 1);
+	s_str *dest = (s_str*)GetStringForIndex(c->region_context, *parms[0], 1);
 	uint32_t channels = (uint32_t)(*parms[1] + NSEEL_CLOSEFACTOR);
 	uint32_t fs = (uint32_t)(*parms[2] + NSEEL_CLOSEFACTOR);
 	uint64_t frameCount = (uint64_t)(*parms[3] + NSEEL_CLOSEFACTOR);
@@ -3921,7 +4376,7 @@ static float NSEEL_CGEN_CALL _eel_listSystemVariable(void *opaque, INT_PTR num_p
 	{
 		for (int j = 0; j < NSEEL_VARS_PER_BLOCK; j++)
 		{
-			char *valid = GetStringForIndex(c->m_string_context, c->varTable_Values[i][j], 1);
+			char *valid = GetStringForIndex(c->region_context, c->varTable_Values[i][j], 1);
 			if (!valid)
 				strncpy(isString, "Is not string", 16);
 			else
@@ -4031,50 +4486,50 @@ redirect(roundf)
 redirect(floorf)
 redirect(ceilf)
 static functionType fnTable1[] = {
-   { "sin",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_WONTMAKEDENORMAL, {(void**)&redirect_sinf} },
-   { "cos",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_cosf} },
-   { "tan",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_tanf}  },
-   { "sqrt",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_WONTMAKEDENORMAL, {(void**)&redirect_sqrtf}, },
-   { "asin",   nseel_asm_1pdd,nseel_asm_1pdd_end,  1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_asinf}, },
-   { "acos",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_acosf}, },
-   { "atan",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_atanf}, },
-   { "atan2",  nseel_asm_2pdd,nseel_asm_2pdd_end, 2 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_TWOPARMSONFPSTACK, {(void**)&redirect_atan2f}, },
-   { "sinh",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_WONTMAKEDENORMAL, {(void**)&redirect_sinhf} },
-   { "cosh",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_coshf} },
-   { "tanh",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_tanhf}  },
-   { "asinh",   nseel_asm_1pdd,nseel_asm_1pdd_end,  1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_asinhf}, },
-   { "acosh",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_acoshf}, },
-   { "atanh",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_atanhf}, },
-   { "log",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_logf} },
-   { "log10",  nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_log10f} },
-   { "hypot",  nseel_asm_2pdd,nseel_asm_2pdd_end, 2 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_TWOPARMSONFPSTACK, {(void**)&redirect_hypotf}, },
-   { "pow",    nseel_asm_2pdd,nseel_asm_2pdd_end, 2 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_TWOPARMSONFPSTACK, {(void**)&redirect_powf}, },
-   { "exp",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_expf}, },
-   { "abs",    nseel_asm_abs,nseel_asm_abs_end,   1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(0) | BIF_WONTMAKEDENORMAL },
-   { "sqr",    nseel_asm_sqr,nseel_asm_sqr_end,   1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(1) },
-   { "min",    nseel_asm_min,nseel_asm_min_end,   2 | NSEEL_NPARAMS_FLAG_CONST | BIF_FPSTACKUSE(3) | BIF_WONTMAKEDENORMAL },
-   { "max",    nseel_asm_max,nseel_asm_max_end,   2 | NSEEL_NPARAMS_FLAG_CONST | BIF_FPSTACKUSE(3) | BIF_WONTMAKEDENORMAL },
-   { "sign",   nseel_asm_sign,nseel_asm_sign_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(2) | BIF_CLEARDENORMAL, },
-   { "rand",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&nseel_int_rand}, },
-   { "round",  nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_roundf} },
-   { "floor",  nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_floorf} },
-   { "ceil",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_ceilf} },
-   { "expint", nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&expint} },
-   { "expintFast",nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&expint_interpolation} },
-   { "invsqrt",nseel_asm_1pdd,nseel_asm_1pdd_end,1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(3), {(void**)&invsqrt} },
-   { "invsqrtFast",nseel_asm_invsqrt,nseel_asm_invsqrt_end,1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(3), },
-   { "circshift",_asm_generic3parm,_asm_generic3parm_end,3,{(void**)&__NSEEL_circshift},NSEEL_PProc_RAM},
-   { "convolve_c",_asm_generic3parm,_asm_generic3parm_end,3,{(void**)&eel_convolve_c},NSEEL_PProc_RAM},
-   { "maxVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_max},NSEEL_PProc_RAM},
-   { "minVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_min},NSEEL_PProc_RAM},
-   { "meanVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_mean},NSEEL_PProc_RAM},
-   { "medianVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_median},NSEEL_PProc_RAM},
-   { "fft",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_fft},NSEEL_PProc_RAM},
-   { "ifft",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_ifft},NSEEL_PProc_RAM},
-   { "fft_real",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_fft_real},NSEEL_PProc_RAM},
-   { "ifft_real",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_ifft_real},NSEEL_PProc_RAM},
-   { "fft_permute",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_fft_permute},NSEEL_PProc_RAM},
-   { "fft_ipermute",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_ifft_permute},NSEEL_PProc_RAM},
+  {"sin",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_WONTMAKEDENORMAL, {(void**)&redirect_sinf} },
+  {"cos",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_cosf} },
+  {"tan",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_tanf}  },
+  {"sqrt",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_WONTMAKEDENORMAL, {(void**)&redirect_sqrtf}, },
+  {"asin",   nseel_asm_1pdd,nseel_asm_1pdd_end,  1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_asinf}, },
+  {"acos",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_acosf}, },
+  {"atan",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_atanf}, },
+  {"atan2",  nseel_asm_2pdd,nseel_asm_2pdd_end, 2 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_TWOPARMSONFPSTACK, {(void**)&redirect_atan2f}, },
+  {"sinh",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_WONTMAKEDENORMAL, {(void**)&redirect_sinhf} },
+  {"cosh",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_coshf} },
+  {"tanh",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_tanhf}  },
+  {"asinh",   nseel_asm_1pdd,nseel_asm_1pdd_end,  1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_asinhf}, },
+  {"acosh",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_acoshf}, },
+  {"atanh",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_atanhf}, },
+  {"log",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_logf} },
+  {"log10",  nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_log10f} },
+  {"hypot",  nseel_asm_2pdd,nseel_asm_2pdd_end, 2 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_TWOPARMSONFPSTACK, {(void**)&redirect_hypotf}, },
+  {"pow",    nseel_asm_2pdd,nseel_asm_2pdd_end, 2 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_TWOPARMSONFPSTACK, {(void**)&redirect_powf}, },
+  {"exp",    nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK, {(void**)&redirect_expf}, },
+  {"abs",    nseel_asm_abs,nseel_asm_abs_end,   1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(0) | BIF_WONTMAKEDENORMAL },
+  {"sqr",    nseel_asm_sqr,nseel_asm_sqr_end,   1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(1) },
+  {"min",    nseel_asm_min,nseel_asm_min_end,   2 | NSEEL_NPARAMS_FLAG_CONST | BIF_FPSTACKUSE(3) | BIF_WONTMAKEDENORMAL },
+  {"max",    nseel_asm_max,nseel_asm_max_end,   2 | NSEEL_NPARAMS_FLAG_CONST | BIF_FPSTACKUSE(3) | BIF_WONTMAKEDENORMAL },
+  {"sign",   nseel_asm_sign,nseel_asm_sign_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(2) | BIF_CLEARDENORMAL, },
+  {"rand",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&nseel_int_rand}, },
+  {"round",  nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_roundf} },
+  {"floor",  nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_floorf} },
+  {"ceil",   nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&redirect_ceilf} },
+  {"expint", nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&expint} },
+  {"expintFast",nseel_asm_1pdd,nseel_asm_1pdd_end, 1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_CLEARDENORMAL, {(void**)&expint_interpolation} },
+  {"invsqrt",nseel_asm_1pdd,nseel_asm_1pdd_end,1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(3), {(void**)&invsqrt} },
+  {"invsqrtFast",nseel_asm_invsqrt,nseel_asm_invsqrt_end,1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK | BIF_FPSTACKUSE(3), },
+  {"circshift",_asm_generic3parm,_asm_generic3parm_end,3,{(void**)&__NSEEL_circshift},NSEEL_PProc_RAM},
+  {"convolve_c",_asm_generic3parm,_asm_generic3parm_end,3,{(void**)&eel_convolve_c},NSEEL_PProc_RAM},
+  {"maxVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_max},NSEEL_PProc_RAM},
+  {"minVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_min},NSEEL_PProc_RAM},
+  {"meanVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_mean},NSEEL_PProc_RAM},
+  {"medianVec",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&eel_median},NSEEL_PProc_RAM},
+  {"fft",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_fft},NSEEL_PProc_RAM},
+  {"ifft",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_ifft},NSEEL_PProc_RAM},
+  {"fft_real",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_fft_real},NSEEL_PProc_RAM},
+  {"ifft_real",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_ifft_real},NSEEL_PProc_RAM},
+  {"fft_permute",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_fft_permute},NSEEL_PProc_RAM},
+  {"fft_ipermute",_asm_generic2parm,_asm_generic2parm_end,2,{(void**)&eel_ifft_permute},NSEEL_PProc_RAM},
   {"memcpy",_asm_generic3parm,_asm_generic3parm_end,3,{(void**)&__NSEEL_RAM_MemCpy},NSEEL_PProc_RAM},
   {"memset",_asm_generic3parm,_asm_generic3parm_end,3,{(void**)&__NSEEL_RAM_MemSet},NSEEL_PProc_RAM},
   {"sleep",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | NSEEL_NPARAMS_FLAG_CONST | BIF_RETURNSONSTACK | BIF_LASTPARMONSTACK,{(void**)&_eel_sleep}},
@@ -4093,18 +4548,26 @@ static functionType fnTable1[] = {
   {"strnicmp",_asm_generic3parm_retd,_asm_generic3parm_retd_end,3 | BIF_RETURNSONSTACK,{(void**)&_eel_strnicmp},NSEEL_PProc_THIS},
   {"printf",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_printf},NSEEL_PProc_THIS},
   {"sprintf",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_sprintf},NSEEL_PProc_THIS},
-  {"resetStringContainers",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_TAKES_VARPARM_EX | BIF_RETURNSONSTACK,{(void**)&_eel_delete_all_strings},NSEEL_PProc_THIS},
+  {"resetSysMemRegion",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_TAKES_VARPARM_EX | BIF_RETURNSONSTACK,{(void**)&_eel_resetSysMemRegion},NSEEL_PProc_THIS},
   {"importFLTFromStr",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&_eel_importFloatArrayFromString},NSEEL_PProc_THIS},
   {"arburgCheckMemoryRequirement",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&arburgCheckMemoryRequirement},NSEEL_PProc_RAM},
-  {"arburgTrainModel",_asm_generic2parm_retd,_asm_generic2parm_retd_end,5 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&arburgTrainModel},NSEEL_PProc_THIS},
-  {"arburgGetPredictionReflectionCoeff",_asm_generic2parm_retd,_asm_generic2parm_retd_end,3 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&arburgGetPredictionReflectionCoeff},NSEEL_PProc_THIS},
+  {"arburgTrainModel",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&arburgTrainModel},NSEEL_PProc_THIS},
   {"arburgPredictBackward",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&arburgPredictBackward},NSEEL_PProc_RAM},
   {"arburgPredictForward",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&arburgPredictForward},NSEEL_PProc_RAM},
+  {"getCosineWindows",_asm_generic2parm_retd,_asm_generic2parm_retd_end,3 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&getCosineWindows},NSEEL_PProc_THIS},
+  {"getAsymmetricCosine",_asm_generic2parm_retd,_asm_generic2parm_retd_end,5 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&getAsymmetricCosine},NSEEL_PProc_THIS},
   {"stftCheckMemoryRequirement",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&stftCheckMemoryRequirement},NSEEL_PProc_THIS},
   {"stftInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&stftInit},NSEEL_PProc_THIS},
+  {"iirHilbertProcess",_asm_generic3parm_retd,_asm_generic3parm_retd_end,3 | BIF_RETURNSONSTACK,{(void **)&iirHilbertProcess},NSEEL_PProc_RAM},
+  {"iirHilbertInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&iirHilbertInit},NSEEL_PProc_THIS},
+  {"movingMinMaxProcess",_asm_generic3parm_retd,_asm_generic3parm_retd_end,3 | BIF_RETURNSONSTACK,{(void **)&movingMinMaxProcess},NSEEL_PProc_RAM},
+  {"movingMinMaxInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&movingMinMaxInit},NSEEL_PProc_RAM},
+  {"movingMedianProcess",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void **)&movingMedianProcess},NSEEL_PProc_RAM},
+  {"movingMedianInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_RETURNSONSTACK,{(void**)&movingMedianInit},NSEEL_PProc_RAM},
   {"stftGetWindowPower",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&stftGetWindowPower},NSEEL_PProc_THIS},
   {"stftForward",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&stftForward},NSEEL_PProc_THIS},
   {"stftBackward",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&stftBackward},NSEEL_PProc_THIS},
+  {"stftSetAsymWnd",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&stftSetAsymWnd},NSEEL_PProc_THIS},
   {"InitPinkNoise",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&pinkNoiseInit},NSEEL_PProc_THIS},
   {"GeneratePinkNoise",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&pinkNoiseGen},NSEEL_PProc_THIS},
   {"InitPolyphaseFilterbank",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&PolyphaseFilterbankInit},NSEEL_PProc_THIS},
@@ -4144,9 +4607,6 @@ static functionType fnTable1[] = {
   {"IIRBandSplitterInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,3 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_iirBandSplitterInit},NSEEL_PProc_THIS},
   {"IIRBandSplitterClearState",_asm_generic1parm_retd,_asm_generic1parm_retd_end, 1 | BIF_RETURNSONSTACK,{(void**)&_eel_iirBandSplitterClearState},NSEEL_PProc_RAM},
   {"IIRBandSplitterProcess",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_iirBandSplitterProcess},NSEEL_PProc_THIS},
-  {"Conv1DInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,3 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_initfftconv1d},NSEEL_PProc_THIS},
-  {"Conv1DProcess",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_processfftconv1d},NSEEL_PProc_THIS},
-  {"Conv1DFree",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_deletefftconv1d},NSEEL_PProc_THIS},
   {"decodeFLACFromFile",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_flacDecodeFile},NSEEL_PProc_THIS},
   {"decodeFLACFromMemory",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_flacDecodeMemory},NSEEL_PProc_THIS},
   {"decodeWavFromFile",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_wavDecodeFile},NSEEL_PProc_THIS},
@@ -4160,17 +4620,70 @@ static functionType fnTable1[] = {
   {"vectorizeMinus",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_vectorizeMinus},NSEEL_PProc_THIS },
   {"vectorizeMultiply",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_vectorizeMultiply},NSEEL_PProc_THIS },
   {"vectorizeDivide",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_vectorizeDivide},NSEEL_PProc_THIS },
+  { "lerpAt",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_lerp},NSEEL_PProc_THIS },
   {"ls",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_ls},NSEEL_PProc_THIS },
   {"cd",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_cd},NSEEL_PProc_THIS },
   {"eval",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_eval},NSEEL_PProc_THIS },
   {"evalFile",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_evalFile},NSEEL_PProc_THIS },
+  {"Conv1DInit",_asm_generic2parm_retd,_asm_generic2parm_retd_end,3 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_initfftconv1d},NSEEL_PProc_THIS },
+  {"Conv1DProcess",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_processfftconv1d},NSEEL_PProc_THIS },
   {"ThreadInit",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_initthread},NSEEL_PProc_THIS },
   {"ThreadCreate",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_createThread},NSEEL_PProc_THIS },
   {"ThreadJoin",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_joinThread},NSEEL_PProc_THIS },
-  {"ThreadDelete",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_deletethread},NSEEL_PProc_THIS },
   {"ThreadMutexLock",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_lockThread},NSEEL_PProc_THIS },
   {"ThreadMutexUnlock",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void**)&_eel_unlockThread},NSEEL_PProc_THIS },
-  {"lerpAt",_asm_generic2parm_retd,_asm_generic2parm_retd_end,4 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void**)&_eel_lerp},NSEEL_PProc_THIS },
+  {"xFloatS",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void **)&_eel_createHPFloatFromString},NSEEL_PProc_THIS },
+  {"xFloatF",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void **)&_eel_createHPFloatFromFloat32},NSEEL_PProc_THIS },
+  {"xF2f32",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void **)&_eel_createHPFloatToFloat32},NSEEL_PProc_THIS },
+  {"xF2str",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void **)&_eel_createHPFloatToString},NSEEL_PProc_THIS },
+  {"xAdd",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFAdd},NSEEL_PProc_THIS },
+  {"xSub",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFSub},NSEEL_PProc_THIS },
+  {"xMul",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFMul},NSEEL_PProc_THIS },
+  {"xDiv",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFDiv},NSEEL_PProc_THIS },
+  {"xfrexp",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFfrexp},NSEEL_PProc_THIS },
+  {"xqfmod",_asm_generic2parm_retd,_asm_generic2parm_retd_end,3 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFqfmod},NSEEL_PProc_THIS },
+  {"xfmod",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFfmod},NSEEL_PProc_THIS },
+  {"xsfmod",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFsfmod},NSEEL_PProc_THIS },
+  {"xMulPowOf2",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFMulPowOf2},NSEEL_PProc_THIS },
+  {"xfrac",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFfrac},NSEEL_PProc_THIS },
+  {"xabs",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFabs},NSEEL_PProc_THIS },
+  {"xtrunc",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFtrunc},NSEEL_PProc_THIS },
+  {"xround",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFround},NSEEL_PProc_THIS },
+  {"xceil",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFceil},NSEEL_PProc_THIS },
+  {"xfloor",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFfloor},NSEEL_PProc_THIS },
+  {"xfix",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFfix},NSEEL_PProc_THIS },
+  {"xtan",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFtan},NSEEL_PProc_THIS },
+  {"xsin",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFsin},NSEEL_PProc_THIS },
+  {"xcos",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFcos},NSEEL_PProc_THIS },
+  {"xatan",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFatan},NSEEL_PProc_THIS },
+  {"xasin",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFasin},NSEEL_PProc_THIS },
+  {"xacos",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFacos},NSEEL_PProc_THIS },
+  {"xNegation",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFNegation},NSEEL_PProc_THIS },
+  {"xatan2",_asm_generic2parm_retd,_asm_generic2parm_retd_end,2 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFatan2},NSEEL_PProc_THIS },
+  {"xsqrt",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFsqrt},NSEEL_PProc_THIS },
+  {"xexp",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFexp},NSEEL_PProc_THIS },
+  {"xexp2",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFexp2},NSEEL_PProc_THIS },
+  {"xexp10",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFexp10},NSEEL_PProc_THIS },
+  {"xlog",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFlog},NSEEL_PProc_THIS },
+  {"xlog2",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFlog2},NSEEL_PProc_THIS },
+  {"xlog10",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFlog10},NSEEL_PProc_THIS },
+  {"xtanh",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFtanh},NSEEL_PProc_THIS },
+  {"xsinh",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFsinh},NSEEL_PProc_THIS },
+  {"xcosh",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFcosh},NSEEL_PProc_THIS },
+  {"xatanh",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFatanh},NSEEL_PProc_THIS },
+  {"xasinh",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFasinh},NSEEL_PProc_THIS },
+  {"xacosh",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFacosh},NSEEL_PProc_THIS },
+  {"xclone",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFclone},NSEEL_PProc_THIS },
+  {"xpow",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFpow},NSEEL_PProc_THIS },
+  {"xintpow",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFIntPow},NSEEL_PProc_THIS },
+  {"xbinexp",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFbinaryexp},NSEEL_PProc_THIS },
+  {"xequal",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFeq},NSEEL_PProc_THIS },
+  {"xnotequal",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFneq},NSEEL_PProc_THIS },
+  {"xlessequal",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFle},NSEEL_PProc_THIS },
+  {"xgreaterequal",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFge},NSEEL_PProc_THIS },
+  {"xgreater",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFgt},NSEEL_PProc_THIS },
+  {"xless",_asm_generic2parm_retd,_asm_generic2parm_retd_end,1 | BIF_TAKES_VARPARM | BIF_RETURNSONSTACK,{(void **)&_eel_HPFlt},NSEEL_PProc_THIS },
+  {"DeleteSysVariable",_asm_generic1parm_retd,_asm_generic1parm_retd_end,1 | BIF_RETURNSONSTACK,{(void **)&_eel_deleteSysVariable},NSEEL_PProc_THIS },
 };
 void printFunctions()
 {
@@ -4181,22 +4694,25 @@ void printFunctions()
 		EEL_STRING_STDOUT_WRITE(badStr, strlen(badStr));
 	}
 }
-
+int XLITTLE_ENDIAN;
 void NSEEL_start()
 {
+	union
+	{
+		unsigned char cc[4];
+		unsigned short s[2];
+		unsigned long n;
+	} u;
+	u.n = 0x12345678;
+	XLITTLE_ENDIAN = (u.s[0] == 0x5678 && u.s[1] == 0x1234 && u.cc[0] == 0x78 && u.cc[1] == 0x56 && u.cc[2] == 0x34 && u.cc[3] == 0x12);
 	// Global memory
-	if (decompressedCoefficients)
-		free(decompressedCoefficients);
-	decompressedCoefficients = (float*)malloc(22438 * sizeof(float));
-	decompressResamplerMQ(compressedCoeffMQ, decompressedCoefficients);
+	precompute_lpfcoeff();
 	initFFTData();
 	srand((uint32_t)time(NULL));
 }
 void NSEEL_quit()
 {
-	if (decompressedCoefficients)
-		free(decompressedCoefficients);
-	decompressedCoefficients = 0;
+	clean_lpfcoeff();
 }
 //---------------------------------------------------------------------------------------------------------------
 static void freeBlocks(llBlock **start)
@@ -4618,9 +5134,7 @@ eelStringSegmentRec *nseel_createStringSegmentRec(compileContext *ctx, const cha
 opcodeRec *nseel_eelMakeOpcodeFromStringSegments(compileContext *ctx, eelStringSegmentRec *rec)
 {
 	if (ctx && ctx->onString)
-	{
 		return nseel_createCompiledValue(ctx, ctx->onString(ctx->caller_this, rec));
-	}
 	return NULL;
 }
 opcodeRec *nseel_createMoreParametersOpcode(compileContext *ctx, opcodeRec *code1, opcodeRec *code2)
@@ -5779,7 +6293,7 @@ unsigned char *compileCodeBlockWithRet(compileContext *ctx, opcodeRec *rec, int3
 	p += funcsz;
 	memcpy(p, &GLUE_RET, sizeof(GLUE_RET)); p += sizeof(GLUE_RET);
 #ifdef __arm__
-	//__clear_cache(newblock2, p);
+	__clear_cache(newblock2, p);
 #endif
 	ctx->l_stats[2] += funcsz + 2;
 	return newblock2;
@@ -7187,7 +7701,7 @@ NSEEL_CODEHANDLE NSEEL_code_compile_ex(NSEEL_VMCTX _ctx, const char *_expression
 			ctx->l_stats[1] = size;
 			handle->code_size = (int32_t)(writeptr - (unsigned char *)handle->code);
 #ifdef __arm__
-			//__clear_cache(handle->code, writeptr);
+			__clear_cache(handle->code, writeptr);
 #endif
 		}
 		handle->blocks = ctx->blocks_head;
@@ -7271,72 +7785,26 @@ void NSEEL_VM_freevars(NSEEL_VMCTX _ctx)
 	if (_ctx)
 	{
 		compileContext *ctx = (compileContext*)_ctx;
-		memset(ctx->ram_state, 0, sizeof(ctx->ram_state));
 		free(ctx->varTable_Values);
 		free(ctx->varTable_Names);
 		ctx->varTable_Values = 0;
 		ctx->varTable_Names = 0;
 		ctx->varTable_numBlocks = 0;
-		if (ctx->numberOfConvolver)
+		if (ctx->region_context)
 		{
-			for (uint32_t i = 0; i < ctx->numberOfConvolver; i++)
-			{
-				void *ptr = ctx->convolverSink[i];
-				int32_t convType = ctx->convolverType[i];
-				if (convType == 1)
-				{
-					FFTConvolver1x1 *conv = (FFTConvolver1x1*)ptr;
-					FFTConvolver1x1Free(conv);
-					free(conv);
-				}
-				if (convType == 2)
-				{
-					FFTConvolver2x2 *conv = (FFTConvolver2x2*)ptr;
-					FFTConvolver2x2Free(conv);
-					free(conv);
-				}
-				if (convType == 4)
-				{
-					FFTConvolver2x4x2 *conv = (FFTConvolver2x4x2*)ptr;
-					FFTConvolver2x4x2Free(conv);
-					free(conv);
-				}
-			}
-			if (ctx->convolverMap)
-				free(ctx->convolverMap);
-			if (ctx->convolverType)
-				free(ctx->convolverType);
-			if (ctx->convolverSink)
-				free(ctx->convolverSink);
-			ctx->convolverMap = 0;
-			ctx->convolverType = 0;
-			ctx->convolverSink = 0;
-			ctx->numberOfConvolver = 0;
-		}
-		if (ctx->numberOfThreads)
-		{
-			for (uint32_t i = 0; i < ctx->numberOfThreads; i++)
-			{
-				thread_delete(ctx, i);
-				free(ctx->codePtrThreadSink[i]);
-			}
-			ctx->numberOfThreads = 0;
-		}
-		if (ctx->m_string_context)
-		{
-			Freeel_string_context_state(ctx->m_string_context);
-			free(ctx->m_string_context);
-			ctx->m_string_context = 0;
+			FreeRegion_context(ctx->region_context);
+			free(ctx->region_context);
+			ctx->region_context = 0;
 		}
 	}
 }
-void NSEEL_init_string(NSEEL_VMCTX _ctx)
+void NSEEL_init_memRegion(NSEEL_VMCTX _ctx)
 {
 	if (_ctx)
 	{
 		compileContext *ctx = (compileContext*)_ctx;
-		ctx->m_string_context = (eel_string_context_state*)malloc(sizeof(eel_string_context_state));
-		Initeel_string_context_state(ctx->m_string_context);
+		ctx->region_context = (eel_builtin_memRegion*)malloc(sizeof(eel_builtin_memRegion));
+		InitRegion_context(ctx->region_context);
 	}
 }
 NSEEL_VMCTX NSEEL_VM_alloc() // return a handle
@@ -7348,7 +7816,7 @@ NSEEL_VMCTX NSEEL_VM_alloc() // return a handle
 		ctx->caller_this = ctx;
 		ctx->scanner = ctx;
 		ctx->onString = addStringCallback;
-		NSEEL_init_string((NSEEL_VMCTX)ctx);
+		NSEEL_init_memRegion((NSEEL_VMCTX)ctx);
 	}
 	return ctx;
 }
@@ -7631,6 +8099,9 @@ opcodeRec *nseel_createFunctionByName(compileContext *ctx, const char *name, int
 }
 #include <float.h>
 //------------------------------------------------------------------------------
+#define GENCONSTANTIF_ELSE(idx) \
+else if (!tmplen ? !stricmp(tmp, xVarName[idx]) : (tmplen == strlen(xVarName[idx]) && !strnicmp(tmp, xVarName[idx], strlen(xVarName[idx])))) \
+return nseel_createCompiledValue(ctx, idx);
 opcodeRec *nseel_translate(compileContext *ctx, const char *tmp, size_t tmplen) // tmplen 0 = null term
 {
 	// this depends on the string being nul terminated eventually, tmplen is used more as a hint than anything else
@@ -7651,13 +8122,30 @@ opcodeRec *nseel_translate(compileContext *ctx, const char *tmp, size_t tmplen) 
 		else if (!tmplen ? !stricmp(tmp, "$E") : (tmplen == 2 && !strnicmp(tmp, "$E", 2)))
 			return nseel_createCompiledValue(ctx, (float)2.71828182845904523536);
 		else if (!tmplen ? !stricmp(tmp, "$PI") : (tmplen == 3 && !strnicmp(tmp, "$PI", 3)))
-			return nseel_createCompiledValue(ctx, (float)3.141592653589793238463);
+			return nseel_createCompiledValue(ctx, (float)M_PIDouble);
 		else if (!tmplen ? !stricmp(tmp, "$PHI") : (tmplen == 4 && !strnicmp(tmp, "$PHI", 4)))
 			return nseel_createCompiledValue(ctx, (float)1.618033988749894848205);
 		else if (!tmplen ? !stricmp(tmp, "$EPS") : (tmplen == 4 && !strnicmp(tmp, "$EPS", 4)))
 			return nseel_createCompiledValue(ctx, (float)FLT_EPSILON);
-		else if (!tmplen ? !stricmp(tmp, "$DBL_MAX") : (tmplen == 4 && !strnicmp(tmp, "$DBL_MAX", 4)))
-			return nseel_createCompiledValue(ctx, (float)FLT_MAX);
+		GENCONSTANTIF_ELSE(0)
+		GENCONSTANTIF_ELSE(1)
+		GENCONSTANTIF_ELSE(2)
+		GENCONSTANTIF_ELSE(3)
+		GENCONSTANTIF_ELSE(4)
+		GENCONSTANTIF_ELSE(5)
+		GENCONSTANTIF_ELSE(6)
+		GENCONSTANTIF_ELSE(7)
+		GENCONSTANTIF_ELSE(8)
+		GENCONSTANTIF_ELSE(9)
+		GENCONSTANTIF_ELSE(10)
+		GENCONSTANTIF_ELSE(11)
+		GENCONSTANTIF_ELSE(12)
+		GENCONSTANTIF_ELSE(13)
+		GENCONSTANTIF_ELSE(14)
+		GENCONSTANTIF_ELSE(15)
+		GENCONSTANTIF_ELSE(16)
+		GENCONSTANTIF_ELSE(17)
+		GENCONSTANTIF_ELSE(18)
 		else if (!tmplen ? !stricmp(tmp, "$MEMBLKLIMIT") : (tmplen == 12 && !strnicmp(tmp, "$MEMBLKLIMIT", 12)))
 			return nseel_createCompiledValue(ctx, (float)NSEEL_RAM_ITEMSPERBLOCK);
 		else if ((!tmplen || tmplen == 4) && tmp[1] == '\'' && tmp[2] && tmp[3] == '\'')

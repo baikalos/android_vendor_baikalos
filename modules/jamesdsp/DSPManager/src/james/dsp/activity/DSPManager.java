@@ -73,12 +73,12 @@ public final class DSPManager extends Activity
     //==================================
     // Static Fields
     //==================================
-    public static final String TAG = "JamesDSPEffectManager";
+    public static final String TAG = "JamesDSPManager";
     private static final String STATE_SELECTED_POSITION = "selected_navigation_drawer_position";
     private static final String PREF_USER_LEARNED_DRAWER = "navigation_drawer_learned";
     //==================================
     public static final String SHARED_PREFERENCES_BASENAME = "james.dsp";
-    public static final String ACTION_UPDATE_PREFERENCES = "baikal.james.dsp.UPDATE";
+    public static final String ACTION_UPDATE_PREFERENCES = "james.dsp.UPDATE";
     public static final String JAMESDSP_FOLDER = "JamesDSP";
     public static final String IMPULSERESPONSE_FOLDER = "Convolver";
     public static final String DDC_FOLDER = "DDC";
