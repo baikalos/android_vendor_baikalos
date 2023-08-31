@@ -5,13 +5,13 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-size_t getMemSizeWarpedPFB(unsigned int N, unsigned int m)
+/*size_t getMemSizeWarpedPFB(unsigned int N, unsigned int m)
 {
 	unsigned int L = 2 * m * N;
 	return sizeof(WarpedPFB) + (N * sizeof(unsigned int)) + ((N + 1) * sizeof(float)) + (N * sizeof(float)) + (L * sizeof(float)) +
 		(L * sizeof(float)) + (N * 2 * N * sizeof(float)) + (N * sizeof(unsigned int)) + (N * sizeof(float)) +
 		(L * sizeof(float)) + (L * sizeof(float)) + (2 * m * N * sizeof(float));
-}
+}*/
 float add_denormal_prevention_white_noise(unsigned int *rand_state)
 {
 	*rand_state = *rand_state * 1234567UL + 890123UL;
@@ -49,10 +49,9 @@ double getOptimalDF(unsigned int N, unsigned int m)
 			else if (m == 6)
 				return 0.51908 * exp(-0.40187 * N) + 0.057579 * exp(-0.027425 * N);
 		}
-        return 0.0;
 	}
-	else
-		return 1.0 / (1.5 * max(N, m));
+//	else
+	return 1.0 / (1.5 * max(N, m));
 }
 void initWarpedPFB(WarpedPFB *pfb, double fs, unsigned int N, unsigned int m)
 {
