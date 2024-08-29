@@ -65,12 +65,6 @@ endif
 PRODUCT_PACKAGES += \
     baikal_su
 
-# MiuiCamera
-#PRODUCT_PACKAGES += \
-#    MiuiCamera \
-#    privapp-permissions-miui_camera.xml \
-
-
 # Alarms
 $(foreach f,$(shell find vendor/lineage/prebuilt/common/product/media/audio/alarms/* | sed 's/ /\\ /g'),\
     $(eval PRODUCT_COPY_FILES += $(f):$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/$(notdir $f)))
