@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (C) 2023-2025 crDroid Android Project
+# Copyright (C) 2018-2025 BaikalOS Android Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,9 +42,9 @@ DEBUG = False
 
 custom_local_manifest = ".repo/local_manifests/roomservice.xml"
 custom_default_revision =  "15.0"
-custom_dependencies = "crdroid.dependencies"
-org_manifest = "crdroidandroid"  # leave empty if org is provided in manifest
-org_display = "crDroid Android"  # needed for displaying
+custom_dependencies = "baikalos.dependencies"
+org_manifest = "baikalos"  # leave empty if org is provided in manifest
+org_display = "BaikalOS Android"  # needed for displaying
 
 github_auth = None
 
@@ -173,7 +173,8 @@ def fetch_dependencies(repo_path, fallback_branch=None):
         return
     _fetch_dep_cache.append(repo_path)
 
-    print('Looking for dependencies')
+    print('Dependencies disabled on BaikalOS. Fetch manually.')
+    return
 
     dep_p = '/'.join((repo_path, custom_dependencies))
     if os.path.exists(dep_p):
@@ -246,13 +247,15 @@ def main():
     device = product[product.find("_") + 1:] or product
 
     if depsonly:
-        repo_path = get_from_manifest(device)
-        if repo_path:
-            fetch_dependencies(repo_path)
-        else:
-            print("Trying dependencies-only mode on a "
-                  "non-existing device tree?")
         sys.exit()
+
+#        repo_path = get_from_manifest(device)
+#        if repo_path:
+#            fetch_dependencies(repo_path)
+#        else:
+#            print("Trying dependencies-only mode on a "
+#                  "non-existing device tree?")
+#        sys.exit()
 
     print("Device {0} not found. Attempting to retrieve device repository from "
           "{1} Github (http://github.com/{2}).".format(device, org_display, org_manifest))
@@ -286,7 +289,7 @@ def main():
         fallback_branch = detect_revision(repository)
         manufacturer = repo_name.replace("android_device_", "").replace("_" + device, "")
         repo_path = "device/%s/%s" % (manufacturer, device)
-        adding = [{'repository': "crdroidandroid/" + repo_name, 'target_path': repo_path}]
+        adding = [{'repository': "BaikalOS/" + repo_name, 'target_path': repo_path}]
 
         add_to_manifest(adding, fallback_branch)
 
