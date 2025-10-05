@@ -30,6 +30,8 @@
         <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService.ActiveReceiver</item>
         <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService.Receiver</item>
         <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService.SecretCodeReceiver</item>
-        <!-- item>com.google.android.gms/com.google.android.gms.chimera.GmsIntentOperationService$GmsExternalReceiver</item -->
+        <item>com.google.android.gms/com.google.android.gms.lockbox.LockboxAlarmReceiver</item>
+        <item>com.google.android.gms/com.google.android.gms.lockbox.service.LockboxBrokerService</item>
+        <item>com.google.android.gms/com.google.android.gms.lockbox.LockboxService</item>
     </string-array>
 </resources>
