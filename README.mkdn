@@ -1,10 +1,10 @@
-crDroid Android
+BaikalOS Android (based on [crDroid Project](https://github.com/crdroidandroid/android/blob/16.0/README.mkdn))
 ===========
 
 Getting started
 ---------------
 
-Please see the [crDroid Project](https://github.com/crdroidandroid/android/blob/16.0/README.mkdn) for building instructions, by device.
+Please see the [BaikalOS Project](https://github.com/baikalos/android/blob/16.0/README.mkdn) for building instructions, by device.
 
 
 Submitting patches

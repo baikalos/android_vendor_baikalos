@@ -1,3 +1,9 @@
+# Fake vbmeta  props
+PRODUCT_PRODUCT_PROPERTIES += \
+    ro.boot.vbmeta.size=4096 \
+    ro.boot.vbmeta.hash_alg=sha256 \
+    ro.boot.vbmeta.avb_version=2.0
+
 # Additional props
 PRODUCT_PRODUCT_PROPERTIES += \
     dalvik.vm.debug.alloc=0 \
@@ -23,9 +29,14 @@ PRODUCT_PRODUCT_PROPERTIES += \
 PRODUCT_PRODUCT_PROPERTIES += \
     ro.input.video_enabled=false
 
+# Blur
+ifneq ($(TARGET_ENABLE_BLUR),false)
+PRODUCT_PRODUCT_PROPERTIES += ro.surface_flinger.supports_background_blur=1
+endif
+
 # Cloned app exemption
 PRODUCT_COPY_FILES += \
-    vendor/lineage/prebuilt/common/etc/sysconfig/preinstalled-packages-platform-crdroid-product.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/preinstalled-packages-platform-crdroid-product.xml
+    vendor/lineage/prebuilt/common/etc/sysconfig/preinstalled-packages-platform-baikal-product.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/preinstalled-packages-platform-baikal-product.xml
 
 # ColumbusService
 ifneq ($(TARGET_SUPPORTS_QUICK_TAP),false)
