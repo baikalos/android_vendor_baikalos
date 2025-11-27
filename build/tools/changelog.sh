@@ -43,7 +43,7 @@ else
 	fi
 fi
 
-REPO_LIST="$(cat .repo/project.list | sed '\?^vendor/crDroidOTA?d')"
+REPO_LIST="$(cat .repo/project.list | sed '\?^vendor/BaikalOTA?d')"
 for i in $(seq $changelog_days); do
     After_Date=`date --date="$i days ago" +%m-%d-%Y`
     k=$(expr $i - 1)
