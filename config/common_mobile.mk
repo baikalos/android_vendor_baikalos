@@ -48,8 +48,8 @@ PRODUCT_PACKAGES += \
 endif
 
 # Legal
-PRODUCT_SYSTEM_PROPERTIES += \
-    ro.crdroidlegal.url=https://crdroid.net/legal.php
+#PRODUCT_SYSTEM_PROPERTIES += \
+#    ro.droidlegal.url=https://crdroid.net/legal.php
 
 # Media
 PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
