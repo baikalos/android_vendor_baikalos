@@ -38,10 +38,10 @@ if dryrun:
     print('Dry run roomservice, no change will be made.')
 
 custom_local_manifest = ".repo/local_manifests/roomservice.xml"
-custom_default_revision = "16.0"
-custom_dependencies = "crdroid.dependencies"
-org_manifest = "crdroidandroid"  # leave empty if org is provided in manifest
-org_display = "crDroid Android"  # needed for displaying
+custom_default_revision =  "16.0"
+custom_dependencies = "baikalos.dependencies"
+org_manifest = "baikalos"  # leave empty if org is provided in manifest
+org_display = "BaikalOS Android"  # needed for displaying
 
 github_auth = None
 
@@ -170,7 +170,7 @@ def add_to_manifest(repos, fallback_branch=None):
         elif "/" not in repo_name:
             repo_remote = org_manifest
         else:  # "/" in repo_name
-            repo_remote = "crdroid"
+            repo_remote="baikalos"
 
         if is_in_manifest(repo_path):
             print('already exists: %s' % repo_path)
@@ -403,6 +403,9 @@ def main():
     print("Device {0} not found. Attempting to retrieve device repository from "
           "{1} Github (http://github.com/{2}).".format(device, org_display, org_manifest))
 
+
+    sys.exit()
+
     githubreq = urllib.request.Request(
         "https://api.github.com/search/repositories?"
         "q={0}+user:{1}+in:name+fork:true".format(device, org_manifest))
@@ -435,6 +438,7 @@ def main():
 
         manufacturer = repo_name.replace("android_device_", "").replace("_" + device, "")
         repo_path = "device/%s/%s" % (manufacturer, device)
+        adding = [{'repository': "baikalos/" + repo_name, 'target_path': repo_path}]
 
         device_repository = {
             'repository': '%s/%s' % (org_manifest, repo_name),

@@ -52,8 +52,8 @@ PRODUCT_PACKAGES += \
     android.software.credentials.prebuilt.xml
 
 # Legal
-PRODUCT_PRODUCT_PROPERTIES += \
-    ro.crdroidlegal.url=https://crdroid.net/legal.php
+#PRODUCT_SYSTEM_PROPERTIES += \
+#    ro.droidlegal.url=https://crdroid.net/legal.php
 
 # Media
 PRODUCT_PRODUCT_PROPERTIES += \
