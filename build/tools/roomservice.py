@@ -33,9 +33,9 @@ DEBUG = False
 
 custom_local_manifest = ".repo/local_manifests/roomservice.xml"
 custom_default_revision =  "16.0"
-custom_dependencies = "crdroid.dependencies"
-org_manifest = "crdroidandroid"  # leave empty if org is provided in manifest
-org_display = "crDroid Android"  # needed for displaying
+custom_dependencies = "baikalos.dependencies"
+org_manifest = "baikalos"  # leave empty if org is provided in manifest
+org_display = "BaikalOS Android"  # needed for displaying
 
 github_auth = None
 
@@ -122,7 +122,7 @@ def add_to_manifest(repos, fallback_branch=None):
         elif "/" not in repo_name:
             repo_remote=org_manifest
         elif "/" in repo_name:
-            repo_remote="crdroid"
+            repo_remote="baikalos"
 
         if is_in_manifest(repo_path):
             print('already exists: %s' % repo_path)
@@ -347,7 +347,7 @@ def main():
         fallback_branch = detect_revision(repository)
         manufacturer = repo_name.replace("android_device_", "").replace("_" + device, "")
         repo_path = "device/%s/%s" % (manufacturer, device)
-        adding = [{'repository': "crdroidandroid/" + repo_name, 'target_path': repo_path}]
+        adding = [{'repository': "baikalos/" + repo_name, 'target_path': repo_path}]
 
         add_to_manifest(adding, fallback_branch)
 
