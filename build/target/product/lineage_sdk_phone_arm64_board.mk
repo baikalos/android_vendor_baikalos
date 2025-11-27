@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # 2.0G + 8M
-BOARD_SUPER_PARTITION_SIZE := 2155872256
-BOARD_EMULATOR_DYNAMIC_PARTITIONS_SIZE := 2147483648
+BOARD_SUPER_PARTITION_SIZE ?= 2155872256
+BOARD_EMULATOR_DYNAMIC_PARTITIONS_SIZE ?= 2147483648
 
 PRODUCT_SDK_ADDON_COPY_FILES += \
     device/generic/goldfish/data/etc/advancedFeatures.ini.arm:images/arm64-v8a/advancedFeatures.ini \

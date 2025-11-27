@@ -1,0 +1,60 @@
+package {
+    default_applicable_licenses: ["system_extras_fake_su_license"],
+}
+
+license {
+    name: "system_extras_fake_su_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "SPDX-license-identifier-Apache-2.0",
+    ],
+    license_text: [
+        "NOTICE",
+    ],
+}
+
+//
+// Copyright (C) 2026 BaikalOS
+//
+
+cc_binary {
+    name: "fake_su_bin",
+    srcs: ["su.cpp"],
+    //static_executable: true,
+
+    // This ensures it goes to /product
+    product_specific: true,
+    installable: false, // We will handle installation manually
+    
+    // This creates the subfolder /product/baikalos/bin/
+    // The actual install path becomes: /product/baikalos/bin/fake_su
+    // We name the binary su_dummy to avoid conflict during build, 
+    // but the overlay will map it as 'su'.
+    relative_install_path: "baikalos/bin",
+    //stem: "su",
+    shared_libs: [
+        "libc",
+    ],
+    static_libs: [
+        "libbase",
+        "libcutils",
+        "libutils",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+
+    // Target Android 16 (API 36-ish)
+    sdk_version: "current",
+}
+
+sh_binary {
+    name: "fake_su",
+    src: ":fake_su_bin", // Reference the binary above
+    product_specific: true,
+    sub_dir: "baikalos/overlay_layer/bin", // This goes into /product/etc/
+    filename: "su", // Final name will be 'su'
+}
